@@ -1,5 +1,6 @@
 import json
 import os
+import io
 from django.http import JsonResponse, HttpResponseBadRequest
 import requests
 from django.http import HttpResponse
@@ -66,9 +67,18 @@ def update_model(request):
                 model = create_new_model()
                 model = retrain_model(model, photo_now)
 
-        # Serializza il modello in formato JSON e invialo come risposta HTTP
-        response_data = json.dumps(model)
-        return JsonResponse(response_data, safe=False)
+    # Serializza il modello come bytes usando io.BytesIO e torch.save
+    buffer = io.BytesIO()
+    torch.save(model, buffer)
+    buffer.seek(0)
+    model_bytes = buffer.read()
+
+    # Costruisci la risposta HTTP con l'allegato del file model.pth
+    response = HttpResponse(content_type='application/octet-stream')
+    response['Content-Disposition'] = 'attachment; filename="model.pth"'
+    response.write(model_bytes)
+
+    return response
 
 
 def create_new_model():
@@ -84,9 +94,6 @@ def create_new_model():
 
 
 def retrain_model(model, photo_now):
-    nparr_now = np.frombuffer(photo_now, np.uint8)
-    photo_now = cv2.imdecode(nparr_now, cv2.IMREAD_COLOR)
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
 
@@ -110,9 +117,6 @@ def retrain_model(model, photo_now):
     img_tensor = transform(image).unsqueeze(0)
     # Crea un oggetto di tipo TensorDataset utilizzando l'immagine img_tensor come input e un valore costante 0 come output.
     dataset = torch.utils.data.TensorDataset(img_tensor, torch.tensor([0]))
-
-
-
 
     # Addestramento del modello
     criterion = torch.nn.CrossEntropyLoss()
@@ -153,4 +157,5 @@ def crop_face(image):
         return cropped_image
     else:
         # Restituisci un errore se sono stati trovati più o nessun volto
+        print("Unable to detect face or multiple faces detected")
         raise Exception('Unable to detect face or multiple faces detected')

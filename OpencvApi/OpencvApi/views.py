@@ -1,5 +1,3 @@
-import json
-import os
 import io
 from django.http import JsonResponse, HttpResponseBadRequest
 import requests
@@ -8,10 +6,10 @@ import numpy as np
 import cv2
 from mpmath.identification import transforms
 import torch
-from django.conf import settings
 from torchvision import models
 import torchvision.transforms as transforms
 from PIL import Image
+import torch.nn.functional as F
 
 
 
@@ -29,13 +27,24 @@ def connection_api(request):
         return HttpResponse('Invalid request method')
 
 
-def update_model(request):
+def process_image(request):
     if request.method == 'POST':
+        print('POST requested')
+
         # Verifica se le immagini sono presenti nella richiesta
         if 'photoNow' not in request.FILES:
             return HttpResponseBadRequest('Problems with your request')
+
         # Leggi i dati binari dell'immagine
         photo_now = request.FILES['photoNow'].read()
+
+        # Verifica se il file del modello è presente nella richiesta
+        if 'model' not in request.FILES:
+            model = None
+        else:
+            # Leggi i dati binari del file del modello
+            model_file = request.FILES['model']
+            model = torch.load(model_file)
 
         # Controlla che l'immagine sia stata correttamente ricevuta
         if not photo_now:
@@ -49,23 +58,100 @@ def update_model(request):
         photo_now = crop_face(img_now)
 
         # Verifica che il file del modello esista
-        model_path = os.path.join(settings.BASE_DIR, 'model.pth')
-        if not os.path.exists(model_path):
+        if model:
+            # Define the transformations to be applied to the image
+            transform = transforms.Compose([
+                transforms.Resize(224),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                     std=[0.229, 0.224, 0.225])
+            ])
+
+            # Convert the image from BGR to RGB
+            image = np.asarray(photo_now)[:, :, [2, 1, 0]]  # Swap the order of the channels from BGR to RGB
+
+            # Convert the image from numpy array to PIL image
+            image = Image.fromarray(image)
+
+            # Convert the image to a PyTorch tensor and apply transformations with cv2
+            # Apply the transformations to the image
+            img_tensor = transform(image).unsqueeze(0)
+
+            # Utilizza il modello per effettuare una predizione
+            with torch.no_grad():
+                model.eval()
+                outputs = model(img_tensor)
+                predicted = F.softmax(outputs, dim=1)
+
+            # Ottieni il valore di probabilità della classe positiva (indice 1)
+            positive_prob = predicted[0][1].item()
+
+            # Stampa i valori di probabilità predetti
+            print(f"Predicted probabilities: {predicted}")
+
+            # Se la probabilità della classe positiva è maggiore della soglia specificata, ritorna 1, altrimenti 0
+            threshold = 0.8
+            if positive_prob > threshold:
+                score = 1
+            else:
+                score = 0
+
+            print(f"Score: {score} (positive probability: {positive_prob})")
+
+            # Restituisci la risposta di quanto si assomigliano i visi
+            return HttpResponse(str(score))
+
+        else:
+            # Se il modello non è presente nella richiesta, ritorna un errore
+            return HttpResponseBadRequest('Model not found')
+
+    else:
+        # Se la richiesta non è una POST, ritorna una HttpResponseBadRequest
+        return HttpResponseBadRequest('Invalid request method')
+
+
+def update_model(request):
+    if request.method == 'POST':
+        # Verifica se le immagini sono presenti nella richiesta
+        if 'photoNow' not in request.FILES:
+            return HttpResponseBadRequest('Problems with your request')
+        # Leggi i dati binari dell'immagine
+        photo_now = request.FILES['photoNow'].read()
+        # Verifica se il file del modello è presente nella richiesta
+        if 'model' not in request.FILES:
+            model = None
+        else:
+            # Leggi i dati binari del file del modello
+            model = request.FILES['model'].read()
+
+        # Controlla che l'immagine sia stata correttamente ricevuta
+        if not photo_now:
+            return HttpResponseBadRequest('Problems with your photo')
+
+        # Decodifica l'immagine utilizzando cv2.imdecode
+        nparr_now = np.frombuffer(photo_now, np.uint8)
+        img_now = cv2.imdecode(nparr_now, cv2.IMREAD_COLOR)
+
+        # Ritaglia l'immagine del volto
+        photo_now = crop_face(img_now)
+
+        # Verifica che il file del modello esista
+        #model_path = os.path.join(settings.BASE_DIR, 'model.pth')
+        if not model:
             # Se il file non esiste, crea un nuovo modello vuoto
-            print("1")
+            print("Create new model")
             model = create_new_model()
-            model = retrain_model(model, photo_now)
+            model = retrain_method(model, photo_now)
         else:
             try:
-                print("2")
                 # Prova a caricare il file del modello esistente
-                model = torch.load(model_path)
-                model = retrain_model(model, photo_now)
+                model = torch.load(io.BytesIO(model))
+                model = retrain_method(model, photo_now)
             except (IOError, RuntimeError):
-                print("3")
                 # Se ci sono problemi con il file del modello esistente, crea un nuovo modello vuoto
                 model = create_new_model()
-                model = retrain_model(model, photo_now)
+                model = retrain_method(model, photo_now)
 
     # Serializza il modello come bytes usando io.BytesIO e torch.save
     buffer = io.BytesIO()
@@ -91,6 +177,31 @@ def create_new_model():
     model.fc = torch.nn.Linear(num_ftrs, num_classes)
 
     return model
+
+def retrain_method(model, photo_now):
+    model = retrain_model(model, photo_now)
+    for i in range(1, 21):
+        model = retrain_model(model, photo_now)
+    print("photo flipped 1")
+    #for i in range(1, 6):
+        # flipped_image = cv2.flip(photo_now, i)
+        # model = retrain_model(model, flipped_image)
+    print("flip photo 2")
+    #for i in range(5, 0, -1):
+        # flipped_image = cv2.flip(photo_now, i)
+        # model = retrain_model(model, flipped_image)
+    print("photo brighter")
+    for i in range(1, 6):
+        bright_image = change_brightness(photo_now, i)
+        model = retrain_model(model, bright_image)
+    print("photo less bright")
+    for i in range(5, 0, -1):
+        bright_image = change_brightness(photo_now, i)
+        model = retrain_model(model, bright_image)
+
+    return model
+
+
 
 
 def retrain_model(model, photo_now):
@@ -159,3 +270,23 @@ def crop_face(image):
         # Restituisci un errore se sono stati trovati più o nessun volto
         print("Unable to detect face or multiple faces detected")
         raise Exception('Unable to detect face or multiple faces detected')
+
+
+
+
+def change_brightness(image, brightness_factor):
+    """
+    Modifica la luminosità dell'immagine
+    :param image: l'immagine da modificare
+    :param brightness_factor: il fattore di luminosità, compreso tra 0 e 1
+    :return: l'immagine modificata
+    """
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv = np.array(hsv, dtype=np.float64)
+    hsv[:, :, 1] = hsv[:, :, 1] * brightness_factor
+    hsv[:, :, 1][hsv[:, :, 1] > 255] = 255
+    hsv[:, :, 2] = hsv[:, :, 2] * brightness_factor
+    hsv[:, :, 2][hsv[:, :, 2] > 255] = 255
+    hsv = np.array(hsv, dtype=np.uint8)
+    image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    return image

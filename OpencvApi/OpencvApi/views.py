@@ -28,6 +28,16 @@ def connection_api(request):
         return HttpResponse('Invalid request method')
 
 
+import cv2
+import numpy as np
+import torch
+import torch.nn.functional as F
+from django.http import HttpResponse, HttpResponseBadRequest
+from PIL import Image
+
+
+
+
 def process_image(request):
     if request.method == 'POST':
         print('POST requested')
@@ -48,55 +58,55 @@ def process_image(request):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
-        # Acquisisce lo streaming video dalla fotocamera o dal dispositivo di acquisizione video
-        cap = cv2.VideoCapture(0)
+        pipeline = start_video()
 
-        while True:
+        while pipeline is not None:
             # Leggi il frame dallo streaming video
-            ret, frame = cap.read()
+            frames = pipeline.wait_for_frames()
+            color_frame = frames.get_color_frame()
+            frame = np.asanyarray(color_frame.get_data())
 
-            if ret:
-                # Rileva la persona nell'immagine
-                bbox = detect_person(frame)
+            # Rileva la persona nell'immagine
+            bbox = detect_person(frame)
 
-                if bbox is not None:
-                    # Ritaglia l'immagine del tronco/schiena utilizzando il bbox rilevato
-                    x, y, w, h = bbox
-                    image = frame[y:y + h, x:x + w]
+            if bbox is not None:
+                # Ritaglia l'immagine del tronco/schiena utilizzando il bbox rilevato
+                x, y, w, h = bbox
+                image = frame[y:y + h, x:x + w]
 
-                    # Converti l'immagine in un tensore PyTorch e applica le trasformazioni
-                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
-                    image = Image.fromarray(image)  # Convert the image to a PIL image
-                    image = transform(image).unsqueeze(
-                        0)  # Convert the image to a PyTorch tensor and apply transformations
+                # Converti l'immagine in un tensore PyTorch e applica le trasformazioni
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
+                image = Image.fromarray(image)  # Convert the image to a PIL image
+                image = transform(image).unsqueeze(
+                    0)  # Convert the image to a PyTorch tensor and apply transformations
 
-                    # Acquisisce il frame della profondità dall'immagine
-                    depth_frame = get_depth_frame(frame)
+                # Acquisisce il frame della profondità dall'immagine
+                depth_frame = get_depth_frame(frame)
 
-                    # Utilizza il modello per effettuare una predizione
-                    with torch.no_grad():
-                        model.eval()
-                        outputs = model(image)
-                        predicted = F.softmax(outputs, dim=1)
+                # Utilizza il modello per effettuare una predizione
+                with torch.no_grad():
+                    model.eval()
+                    outputs = model(image)
+                    predicted = F.softmax(outputs, dim=1)
 
-                    # Ottieni il valore di probabilità della classe positiva (indice 1)
-                    positive_prob = predicted[0][1].item()
+                # Ottieni il valore di probabilità della classe positiva (indice 1)
+                positive_prob = predicted[0][1].item()
 
-                    # Stampa i valori di probabilità predetti
-                    print(f"Predicted probabilities: {predicted}")
+                # Stampa i valori di probabilità predetti
+                print(f"Predicted probabilities: {predicted}")
 
-                    # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
-                    threshold = 0.8
-                    if positive_prob > threshold:
-                        cv2.imshow('frame', frame)
-                        follow_person(image, bbox, depth_frame)
+                # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
+                threshold = 0.8
+                if positive_prob > threshold:
+                    cv2.imshow('frame', frame)
+                    follow_person(image, bbox, depth_frame)
 
-                # Se viene premuto il tasto 'q', interrompi il ciclo while
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+            # Se viene premuto il tasto 'q', interrompi il ciclo while
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
         # Rilascia le risorse
-        cap.release()
+        pipeline.stop()
         # Chiudi tutte le finestre di OpenCV
         cv2.destroyAllWindows()
 
@@ -106,6 +116,7 @@ def process_image(request):
     else:
         # Se la richiesta non è una POST, ritorna una HttpResponseBadRequest
         return HttpResponseBadRequest('Invalid request method')
+
 
 
 def follow_person(image, bbox, depth_frame):
@@ -266,61 +277,60 @@ def get_depth_frame(frame):
 
 
 
+#            ******************          UPDATE MODEL          ******************
 
 def update_model(request):
-    if request.method == 'POST':
-        # Verifica se le immagini sono presenti nella richiesta
-        if 'photoNow' not in request.FILES:
-            return HttpResponseBadRequest('Problems with your request')
-        # Leggi i dati binari dell'immagine
-        photo_now = request.FILES['photoNow'].read()
-        # Verifica se il file del modello è presente nella richiesta
-        if 'model' not in request.FILES:
-            model = None
-        else:
-            # Leggi i dati binari del file del modello
-            model = request.FILES['model'].read()
+        photo_now = capture_image(request)
 
-        # Controlla che l'immagine sia stata correttamente ricevuta
-        if not photo_now:
-            return HttpResponseBadRequest('Problems with your photo')
+        # Verifica se l'immagine è stata acquisita correttamente
+        if photo_now is not None:
+            # Ridimensiona l'immagine
+            photo_now = cv2.resize(photo_now, (640, 480))
 
-        # Decodifica l'immagine utilizzando cv2.imdecode
-        nparr_now = np.frombuffer(photo_now, np.uint8)
-        img_now = cv2.imdecode(nparr_now, cv2.IMREAD_COLOR)
+            # Elabora l'immagine per rilevare la parte posteriore o inferiore del corpo
+            cropped_image = crop_back(photo_now)
 
-        # Ritaglia l'immagine del volto
-        photo_now = crop_back(img_now)
 
-        # Verifica che il file del modello esista
-        #model_path = os.path.join(settings.BASE_DIR, 'model.pth')
-        if not model:
-            # Se il file non esiste, crea un nuovo modello vuoto
-            print("Create new model")
-            model = create_new_model()
-            model = retrain_method(model, photo_now)
-        else:
-            try:
-                # Prova a caricare il file del modello esistente
-                model = torch.load(io.BytesIO(model))
-                model = retrain_method(model, photo_now)
-            except (IOError, RuntimeError):
-                # Se ci sono problemi con il file del modello esistente, crea un nuovo modello vuoto
+            ## *** Model ***
+            # Verifica se il file del modello è presente nella richiesta
+            if 'model' not in request.FILES:
+                model = None
+            else:
+                # Leggi i dati binari del file del modello
+                model = request.FILES['model'].read()
+
+            # Verifica che il file del modello esista
+            #model_path = os.path.join(settings.BASE_DIR, 'model.pth')
+            if not model:
+                # Se il file non esiste, crea un nuovo modello vuoto
+                print("Create new model")
                 model = create_new_model()
                 model = retrain_method(model, photo_now)
+            else:
+                try:
+                    # Prova a caricare il file del modello esistente
+                    model = torch.load(io.BytesIO(model))
+                    model = retrain_method(model, photo_now)
+                except (IOError, RuntimeError):
+                    # Se ci sono problemi con il file del modello esistente, crea un nuovo modello vuoto
+                    model = create_new_model()
+                    model = retrain_method(model, photo_now)
 
-    # Serializza il modello come bytes usando io.BytesIO e torch.save
-    buffer = io.BytesIO()
-    torch.save(model, buffer)
-    buffer.seek(0)
-    model_bytes = buffer.read()
+            # Serializza il modello come bytes usando io.BytesIO e torch.save
+            buffer = io.BytesIO()
+            torch.save(model, buffer)
+            buffer.seek(0)
+            model_bytes = buffer.read()
 
-    # Costruisci la risposta HTTP con l'allegato del file model.pth
-    response = HttpResponse(content_type='application/octet-stream')
-    response['Content-Disposition'] = 'attachment; filename="model.pth"'
-    response.write(model_bytes)
+            # Costruisci la risposta HTTP con l'allegato del file model.pth
+            response = HttpResponse(content_type='application/octet-stream')
+            response['Content-Disposition'] = 'attachment; filename="model.pth"'
+            response.write(model_bytes)
 
-    return response
+            return response
+        else:
+            return HttpResponse("Failed to acquire image.")
+
 
 
 def create_new_model():
@@ -336,7 +346,7 @@ def create_new_model():
 
 def retrain_method(model, photo_now):
     model = retrain_model(model, photo_now)
-    for i in range(1, 21):
+    for i in range(1, 6):
         model = retrain_model(model, photo_now)
     print("photo flipped 1")
     #for i in range(1, 6):
@@ -347,11 +357,11 @@ def retrain_method(model, photo_now):
         # flipped_image = cv2.flip(photo_now, i)
         # model = retrain_model(model, flipped_image)
     print("photo brighter")
-    for i in range(1, 6):
+    for i in range(1, 3):
         bright_image = change_brightness(photo_now, i)
         model = retrain_model(model, bright_image)
     print("photo less bright")
-    for i in range(5, 0, -1):
+    for i in range(2, 0, -1):
         bright_image = change_brightness(photo_now, i)
         model = retrain_model(model, bright_image)
 
@@ -409,7 +419,7 @@ def crop_back(image):
     # Utilizza il classificatore di Haar per rilevare la parte posteriore della persona
     back_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_upperbody.xml')
     backs = back_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
+    print("Try with haarcascade_upperbody")
     # Verifica se è stata trovata una sola parte posteriore
     if len(backs) == 1:
         # Ritaglia l'immagine per avere solo la parte posteriore
@@ -422,7 +432,7 @@ def crop_back(image):
         print("Image is good")
 
         return cropped_image
-
+    print("Try with haarcascade_lowerbody")
     # Utilizza il classificatore di Haar per rilevare la parte inferiore del corpo
     lower_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_lowerbody.xml')
     lowers = lower_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
@@ -440,76 +450,77 @@ def crop_back(image):
 
         return cropped_image
 
-    # Utilizza il classificatore di Haar per rilevare la parte superiore del corpo
-    lower_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_mcs_upperbody.xml')
-    lowers = lower_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    print("Try with YOLOv5 - full body")
+    # Carica il modello YOLOv5
+    model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
 
-    # Verifica se è stata trovata una sola parte inferiore
-    if len(lowers) == 1:
-        # Ritaglia l'immagine per avere solo la parte inferiore
-        (x, y, w, h) = lowers[0]
-        cropped_image = image[y:y + h, x:x + w]
-        # Adatta le immagini alla stessa dimensione
-        cropped_image = cv2.resize(cropped_image, (224, 225))
+    # Utilizza il modello YOLOv5 per rilevare la parte posteriore della persona
+    results = model(image, size=640)
 
-        print("Image is good")
+    # Estrae le coordinate del bounding box della parte posteriore della persona
+    bboxes = results.xyxy[0].cpu().numpy()
+    for bbox in bboxes:
+        if bbox[5] == 0:  # Se l'oggetto rilevato è una persona
+            x, y, w, h = bbox[:4].astype(int)
+            cropped_image = image[y:y + h, x:x + w]
 
-        return cropped_image
+            # Adatta le immagini alla stessa dimensione
+            cropped_image = cv2.resize(cropped_image, (224, 225))
 
-    # Utilizza il classificatore di Haar per rilevare la parte superiore del corpo
-    lower_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_neck.xml')
-    lowers = lower_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+            print("Image is good")
 
-    # Verifica se è stata trovata una sola parte inferiore
-    if len(lowers) == 1:
-        # Ritaglia l'immagine per avere solo la parte inferiore
-        (x, y, w, h) = lowers[0]
-        cropped_image = image[y:y + h, x:x + w]
-        # Adatta le immagini alla stessa dimensione
-        cropped_image = cv2.resize(cropped_image, (224, 225))
+            return cropped_image
 
-        print("Image is good")
-
-        return cropped_image
-
-    # Utilizza il classificatore di Haar per rilevare la parte superiore del corpo
-    lower_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_head_and_shoulders.xml')
-    lowers = lower_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
-    # Verifica se è stata trovata una sola parte inferiore
-    if len(lowers) == 1:
-        # Ritaglia l'immagine per avere solo la parte inferiore
-        (x, y, w, h) = lowers[0]
-        cropped_image = image[y:y + h, x:x + w]
-        # Adatta le immagini alla stessa dimensione
-        cropped_image = cv2.resize(cropped_image, (224, 225))
-
-        print("Image is good")
-
-        return cropped_image
-
-    # Utilizza il classificatore di Haar per rilevare l'intera persona
-    full_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_head.xml')
-    fulls = full_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
-    # Verifica se è stata trovata l'intera persona
-    if len(fulls) == 1:
-        # Ritaglia l'immagine per avere solo la persona
-        (x, y, w, h) = fulls[0]
-        cropped_image = image[y:y + h, x:x + w]
-
-        # Adatta le immagini alla stessa dimensione
-        cropped_image = cv2.resize(cropped_image, (224, 225))
-
-        print("Image is good")
-
-        return cropped_image
 
     else:
         # Restituisci un errore se sono state trovate più o nessuna parte
         print("Unable to detect back or lower body")
         raise Exception('Unable to detect back or lower body')
 
+
+
+
+def capture_image(request):
+    # Verifica la presenza di una fotocamera Intel RealSense collegata tramite USB
+    ctx = rs.context()
+    devices = ctx.query_devices()
+    if devices.size() > 0:
+        # Ottieni l'immagine dalla fotocamera
+        pipeline = rs.pipeline()
+        config = rs.config()
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        pipeline.start(config)
+        frames = pipeline.wait_for_frames()
+        color_frame = frames.get_color_frame()
+        photo_now = np.asarray(color_frame.get_data())
+        pipeline.stop()
+        print("Intel - USB")
+    else:
+        # Verifica se le immagini sono presenti nella richiesta
+        if 'photo' in request.FILES:
+            # Leggi l'immagine dalla richiesta
+            photo = request.FILES['photo'].read()
+            nparr = np.frombuffer(photo, np.uint8)
+            photo_now = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            print("Webcam")
+        else:
+            return HttpResponse("Failed to acquire image.")
+    return photo_now
+
+def start_video():
+    # Verifica la presenza di una fotocamera Intel RealSense collegata tramite USB
+    ctx = rs.context()
+    devices = ctx.query_devices()
+    if devices.size() > 0:
+        # Ottieni lo streaming video dalla fotocamera
+        pipeline = rs.pipeline()
+        config = rs.config()
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        pipeline.start(config)
+        print("Start streaming: Intel - USB")
+    else:
+        print("Error with Intel")
+        return HttpResponse("Failed to acquire video stream.")
 
 def change_brightness(image, brightness_factor):
     """

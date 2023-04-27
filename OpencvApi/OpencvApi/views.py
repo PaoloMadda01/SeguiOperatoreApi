@@ -142,8 +142,6 @@ def follow_person(image, bbox, depth_frame):
     return(x_percent, y_percent, distance)
 
 
-
-
 def calculate_distance_and_coordinates(depth_frame, bbox):
     # Ottiene i dati di profondità dall'immagine di profondità
     depth_data = depth_frame.get_data()
@@ -179,50 +177,43 @@ def calculate_distance_and_coordinates(depth_frame, bbox):
     return avg_distance, (x, y, z)
 
 
+
+# Cerca la persona e crea la bbox di essa
 def detect_person(frame):
-    # Scarica il modello YOLOv3 pre-addestrato
-    net = cv2.dnn.readNet("yolov3.weights", "yolov3.cfg")
+    # Scarica il modello YOLOv5 pre-addestrato
+    model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
 
     # Imposta i parametri di confidenza e non massima soppressione
     conf_threshold = 0.5
-    nms_threshold = 0.4
+    iou_threshold = 0.4
 
     # Estrae le dimensioni del frame
     height, width, _ = frame.shape
 
-    # Crea un blob dall'immagine per l'input del modello
-    blob = cv2.dnn.blobFromImage(frame, 1/255, (416, 416), swapRB=True, crop=False)
+    # Crea un tensor dall'immagine per l'input del modello
+    tensor = model.transform(frame)[0]
 
-    # Passa il blob attraverso la rete
-    net.setInput(blob)
-
-    # Ottiene gli output dal layer dell'output della rete YOLOv3
-    layer_names = net.getLayerNames()
-    output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
-    outputs = net.forward(output_layers)
+    # Passa il tensor attraverso la rete YOLOv5
+    results = model(tensor, size=640)
 
     # Inizializza le liste per le scatole rilevate, le confidenze e le classi
     boxes = []
     confidences = []
     class_ids = []
 
-    # Analizza gli output della rete YOLOv3
-    for output in outputs:
-        for detection in output:
-            # Ottiene le informazioni sulla classe, la confidenza e le coordinate della scatola
-            scores = detection[5:]
-            class_id = np.argmax(scores)
-            confidence = scores[class_id]
-            if confidence > conf_threshold and class_id == 0:  # Class ID 0: persona
-                center_x, center_y, w, h = (detection[:4] * np.array([width, height, width, height])).astype(int)
-                x = center_x - w // 2
-                y = center_y - h // 2
-                boxes.append([x, y, w, h])
-                confidences.append(float(confidence))
-                class_ids.append(class_id)
+    # Analizza gli output della rete YOLOv5
+    for detection in results.xyxy[0]:
+        # Ottiene le informazioni sulla classe, la confidenza e le coordinate della scatola
+        class_id = detection[-1]
+        confidence = detection[-2]
+        if confidence > conf_threshold and class_id == 0:  # Class ID 0: persona
+            x, y, w, h = detection[:4].astype(int)
+            boxes.append([x, y, w, h])
+            confidences.append(float(confidence))
+            class_ids.append(class_id)
 
     # Applica la non massima soppressione per rimuovere le sovrapposizioni
-    indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, nms_threshold)
+    indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, iou_threshold)
 
     # Crea il bounding box per la persona rilevata
     bbox = None
@@ -232,6 +223,7 @@ def detect_person(frame):
         bbox = (x, y, x + w, y + h)
 
     return bbox
+
 
 def get_depth_frame(frame):
     """

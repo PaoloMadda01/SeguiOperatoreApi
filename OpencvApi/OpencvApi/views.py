@@ -1,17 +1,17 @@
 import io
 from django.http import JsonResponse, HttpResponseBadRequest
 import requests
-from django.http import HttpResponse
-import numpy as np
-import cv2
 from mpmath.identification import transforms
-import torch
 from torchvision import models
 import torchvision.transforms as transforms
-from PIL import Image
-import torch.nn.functional as F
 import pyrealsense2 as rs
+import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
+from django.http import HttpResponse, HttpResponseBadRequest
+from PIL import Image
+import math
 
 
 #Per testare lo stato in modo semplice la connessione all'api.
@@ -28,12 +28,6 @@ def connection_api(request):
         return HttpResponse('Invalid request method')
 
 
-import cv2
-import numpy as np
-import torch
-import torch.nn.functional as F
-from django.http import HttpResponse, HttpResponseBadRequest
-from PIL import Image
 
 
 
@@ -52,19 +46,15 @@ def process_image(request):
 
         # Define the transformations to be applied to the image
         transform = transforms.Compose([
-            transforms.Resize(224),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transforms.Resize((640, 480)),  # Ridimensiona l'immagine a una risoluzione di 640x480
+            transforms.ToTensor(),  # Converte l'immagine in un tensore PyTorch
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalizza l'immagine
         ])
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model.to(device)
 
-        pipeline = start_video()
-
-        while pipeline is not None:
-            # Leggi il frame dallo streaming video
-            frames = pipeline.wait_for_frames()
-            color_frame = frames.get_color_frame()
-            frame = np.asanyarray(color_frame.get_data())
+        while True:
+            frame = capture_image(request=None)
 
             # Rileva la persona nell'immagine
             bbox = detect_person(frame)
@@ -72,16 +62,13 @@ def process_image(request):
             if bbox is not None:
                 # Ritaglia l'immagine del tronco/schiena utilizzando il bbox rilevato
                 x, y, w, h = bbox
+
                 image = frame[y:y + h, x:x + w]
 
                 # Converti l'immagine in un tensore PyTorch e applica le trasformazioni
                 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
                 image = Image.fromarray(image)  # Convert the image to a PIL image
-                image = transform(image).unsqueeze(
-                    0)  # Convert the image to a PyTorch tensor and apply transformations
-
-                # Acquisisce il frame della profondità dall'immagine
-                depth_frame = get_depth_frame(frame)
+                image = transform(image).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
 
                 # Utilizza il modello per effettuare una predizione
                 with torch.no_grad():
@@ -93,20 +80,22 @@ def process_image(request):
                 positive_prob = predicted[0][1].item()
 
                 # Stampa i valori di probabilità predetti
-                print(f"Predicted probabilities: {predicted}")
+                #print(f"Predicted probabilities: {predicted}")
 
                 # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
-                threshold = 0.8
+                threshold = 0.0009
                 if positive_prob > threshold:
-                    cv2.imshow('frame', frame)
-                    follow_person(image, bbox, depth_frame)
+                    #print("Predicted!")
+                    x_coordinate, y_coordinate, distance = follow_person(image, bbox)
+                    # Print the distance and the coordinates of the person
+                    print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {distance})")
 
             # Se viene premuto il tasto 'q', interrompi il ciclo while
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
         # Rilascia le risorse
-        pipeline.stop()
+        #pipeline.stop()
         # Chiudi tutte le finestre di OpenCV
         cv2.destroyAllWindows()
 
@@ -119,110 +108,125 @@ def process_image(request):
 
 
 
-def follow_person(image, bbox, depth_frame):
+def follow_person(image, bbox):
     # Get the center point of the bounding box
     x_center = (bbox[0] + bbox[2]) / 2
     y_center = (bbox[1] + bbox[3]) / 2
 
     # Get the dimensions of the image
-    height, width = image.shape
+    height = image.shape[3]
+    width = image.shape[2]
+    channels = image.shape[1]
 
     # Calculate the x and y coordinates of the center point of the bounding box as a percentage of the image size
     x_percent = x_center / width
     y_percent = y_center / height
 
     # Calculate the distance and the coordinates of the person
-    distance, (x_coordinate, y_coordinate, z_coordinate) = calculate_distance_and_coordinates(depth_frame, bbox)
+    x_coordinate, y_coordinate, distance = calculate_coordinates(image, bbox)
 
-    # Print the distance and the coordinates of the person
-    print(f"Distance: {distance}")
-    print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {z_coordinate})")
-
-    # Move the robot to follow the person
     return(x_percent, y_percent, distance)
 
-
-def calculate_distance_and_coordinates(depth_frame, bbox):
-    # Ottiene i dati di profondità dall'immagine di profondità
-    depth_data = depth_frame.get_data()
+def calculate_coordinates(image, bbox):
+    # Acquisisce il frame della profondità dall'immagine
+    depth_frame = get_depth_frame(image)
 
     # Ottiene le coordinate del centro del bounding box
     x_min, y_min, x_max, y_max = bbox
     x_center = int((x_min + x_max) / 2)
     y_center = int((y_min + y_max) / 2)
 
-    # Calcola la distanza media delle zone all'interno del bounding box
-    distances = []
-    for x in range(x_min, x_max):
-        for y in range(y_min, y_max):
-            dist = depth_data[y][x] / 10.0  # Converte la distanza in cm
-            if dist != 0:
-                distances.append(dist)
+    # Ottiene la distanza dal pixel di interesse nel frame della profondità
+    index_1 = depth_frame[0][1]
+    index_2 = depth_frame[0][2]
+    # coordinate di profondità
+    z1 = 0  # distanza dal sensore di profondità corrispondente al pixel (0, 0)
+    z2 = np.where(depth_frame[0] == index_1)[0][0]  # distanza dal sensore di profondità corrispondente al pixel (0, 1)
+    z3 = np.where(depth_frame[0] == index_2)[0][0]  # distanza dal sensore di profondità corrispondente al pixel (0, 2)
 
-    avg_distance = sum(distances) / len(distances)
+    # distanza interpolata
+    distance = math.sqrt((z2 - z1)**2 + (x_center**2 + y_center**2) + (z3 - z1)**2)
 
-    # Calcola le coordinate della persona
-    # utilizzando il sensore ad infrarossi per ottenere la distanza
-    x, y, z = rs.rs2_deproject_pixel_to_point(
-        depth_frame.profile.as_video_stream_profile().intrinsics,  # parametri della fotocamera
-        [x_center, y_center],  # coordinate del centro del bounding box
-        avg_distance)  # distanza media
+    # Calcola le coordinate della persona utilizzando il sensore ad infrarossi
+    # per ottenere la distanza tra la telecamera e il pixel di interesse
+    #x, y, z = rs.rs2_deproject_pixel_to_point(
+    #    depth_frame.profile.as_video_stream_profile().intrinsics,  # parametri della fotocamera
+    #    [x_center, y_center],  # coordinate del centro del bounding box
+    #    distance)  # distanza dal pixel di interesse
 
     # Converte le coordinate in metri
-    x = x / 1000.0
-    y = y / 1000.0
-    z = z / 1000.0
+    x = x_center / 1000.0
+    y = y_center / 1000.0
+    distance = distance / 1000.0
 
-    # Ritorna la distanza media e le coordinate della persona
-    return avg_distance, (x, y, z)
+    # Ritorna la distanza e le coordinate della persona
+    return x, y, distance
+
+
+
+
+
+
+
+
 
 
 
 # Cerca la persona e crea la bbox di essa
 def detect_person(frame):
-    # Scarica il modello YOLOv5 pre-addestrato
+    # Carica il modello YOLOv5
     model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
 
-    # Imposta i parametri di confidenza e non massima soppressione
-    conf_threshold = 0.5
-    iou_threshold = 0.4
-
-    # Estrae le dimensioni del frame
-    height, width, _ = frame.shape
-
-    # Crea un tensor dall'immagine per l'input del modello
-    tensor = model.transform(frame)[0]
-
-    # Passa il tensor attraverso la rete YOLOv5
-    results = model(tensor, size=640)
+    # Utilizza il modello YOLOv5 per rilevare la parte posteriore della persona
+    results = model(frame, size=640)
 
     # Inizializza le liste per le scatole rilevate, le confidenze e le classi
     boxes = []
     confidences = []
     class_ids = []
 
+    # Imposta i parametri di confidenza e non massima soppressione
+    conf_threshold = 0.5
+    iou_threshold = 0.4
+
     # Analizza gli output della rete YOLOv5
+
     for detection in results.xyxy[0]:
         # Ottiene le informazioni sulla classe, la confidenza e le coordinate della scatola
         class_id = detection[-1]
         confidence = detection[-2]
         if confidence > conf_threshold and class_id == 0:  # Class ID 0: persona
-            x, y, w, h = detection[:4].astype(int)
+            x, y, w, h = detection[:4].cpu().numpy().astype(int)  # Converte il tensore in un array NumPy e utilizza il metodo astype
             boxes.append([x, y, w, h])
             confidences.append(float(confidence))
             class_ids.append(class_id)
-
     # Applica la non massima soppressione per rimuovere le sovrapposizioni
     indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, iou_threshold)
 
     # Crea il bounding box per la persona rilevata
-    bbox = None
     if len(indices) > 0:
-        i = indices[0][0]
+        #print("Person detected")
+        i = indices[0]
         x, y, w, h = boxes[i]
         bbox = (x, y, x + w, y + h)
+    else:
+        bbox = None
+        print("No person detected")
 
     return bbox
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def get_depth_frame(frame):
@@ -297,16 +301,16 @@ def update_model(request):
                 # Se il file non esiste, crea un nuovo modello vuoto
                 print("Create new model")
                 model = create_new_model()
-                model = retrain_method(model, photo_now)
+                model = retrain_method(model, cropped_image)
             else:
                 try:
                     # Prova a caricare il file del modello esistente
                     model = torch.load(io.BytesIO(model))
-                    model = retrain_method(model, photo_now)
+                    model = retrain_method(model, cropped_image)
                 except (IOError, RuntimeError):
                     # Se ci sono problemi con il file del modello esistente, crea un nuovo modello vuoto
                     model = create_new_model()
-                    model = retrain_method(model, photo_now)
+                    model = retrain_method(model, cropped_image)
 
             # Serializza il modello come bytes usando io.BytesIO e torch.save
             buffer = io.BytesIO()
@@ -408,41 +412,6 @@ def retrain_model(model, photo_now):
 
 
 def crop_back(image):
-    # Utilizza il classificatore di Haar per rilevare la parte posteriore della persona
-    back_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_upperbody.xml')
-    backs = back_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-    print("Try with haarcascade_upperbody")
-    # Verifica se è stata trovata una sola parte posteriore
-    if len(backs) == 1:
-        # Ritaglia l'immagine per avere solo la parte posteriore
-        (x, y, w, h) = backs[0]
-        cropped_image = image[y:y + h, x:x + w]
-
-        # Adatta le immagini alla stessa dimensione
-        cropped_image = cv2.resize(cropped_image, (224, 225))
-
-        print("Image is good")
-
-        return cropped_image
-    print("Try with haarcascade_lowerbody")
-    # Utilizza il classificatore di Haar per rilevare la parte inferiore del corpo
-    lower_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_lowerbody.xml')
-    lowers = lower_cascade.detectMultiScale(image, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-
-    # Verifica se è stata trovata una sola parte inferiore
-    if len(lowers) == 1:
-        # Ritaglia l'immagine per avere solo la parte inferiore
-        (x, y, w, h) = lowers[0]
-        cropped_image = image[y:y + h, x:x + w]
-
-        # Adatta le immagini alla stessa dimensione
-        cropped_image = cv2.resize(cropped_image, (224, 225))
-
-        print("Image is good")
-
-        return cropped_image
-
-    print("Try with YOLOv5 - full body")
     # Carica il modello YOLOv5
     model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
 
@@ -460,6 +429,7 @@ def crop_back(image):
             cropped_image = cv2.resize(cropped_image, (224, 225))
 
             print("Image is good")
+            print("Try with YOLOv5 - full body")
 
             return cropped_image
 
@@ -469,6 +439,14 @@ def crop_back(image):
         print("Unable to detect back or lower body")
         raise Exception('Unable to detect back or lower body')
 
+
+
+
+
+
+
+
+# Utilitis
 
 
 
@@ -486,7 +464,7 @@ def capture_image(request):
         color_frame = frames.get_color_frame()
         photo_now = np.asarray(color_frame.get_data())
         pipeline.stop()
-        print("Intel - USB")
+        #print("Intel - USB")
     else:
         # Verifica se le immagini sono presenti nella richiesta
         if 'photo' in request.FILES:
@@ -510,9 +488,13 @@ def start_video():
         config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
         pipeline.start(config)
         print("Start streaming: Intel - USB")
+        return(pipeline)
     else:
         print("Error with Intel")
         return HttpResponse("Failed to acquire video stream.")
+
+
+
 
 def change_brightness(image, brightness_factor):
     """

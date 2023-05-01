@@ -30,7 +30,7 @@ def connection_api(request):
 
 
 
-
+#       **********            Process Image           **********
 
 def process_image(request):
     if request.method == 'POST':
@@ -165,13 +165,6 @@ def calculate_coordinates(image, bbox):
 
 
 
-
-
-
-
-
-
-
 # Cerca la persona e crea la bbox di essa
 def detect_person(frame):
     # Carica il modello YOLOv5
@@ -219,61 +212,7 @@ def detect_person(frame):
 
 
 
-
-
-
-
-
-
-
-
-
-
-def get_depth_frame(frame):
-    """
-    Get the depth frame from the input frame using the RealSense depth sensor.
-
-    Args:
-        frame: the input frame.
-
-    Returns:
-        The depth frame.
-    """
-    # Create a pipeline object for the RealSense depth sensor
-    pipeline = rs.pipeline()
-
-    # Create a configuration object for the pipeline
-    config = rs.config()
-
-    # Enable the depth stream
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-
-    # Start the pipeline
-    profile = pipeline.start(config)
-
-    try:
-        # Wait for a coherent pair of frames: depth and color
-        frames = pipeline.wait_for_frames()
-        depth_frame = frames.get_depth_frame()
-
-        # Convert the depth frame to a numpy array
-        depth_image = np.asanyarray(depth_frame.get_data())
-
-        # Resize the depth image to match the size of the color image
-        resized_depth_image = cv2.resize(depth_image, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
-
-        return resized_depth_image
-
-    finally:
-        # Stop the pipeline
-        pipeline.stop()
-
-
-
-
-
-
-#            ******************          UPDATE MODEL          ******************
+#       **********            UPDATE MODEL           **********
 
 def update_model(request):
         photo_now = capture_image(request)
@@ -443,13 +382,7 @@ def crop_back(image):
 
 
 
-
-
-
-# Utilitis
-
-
-
+#       **********            UTILITIES           **********
 def capture_image(request):
     # Verifica la presenza di una fotocamera Intel RealSense collegata tramite USB
     ctx = rs.context()
@@ -494,6 +427,45 @@ def start_video():
         return HttpResponse("Failed to acquire video stream.")
 
 
+def get_depth_frame(frame):
+    """
+    Get the depth frame from the input frame using the RealSense depth sensor.
+
+    Args:
+        frame: the input frame.
+
+    Returns:
+        The depth frame.
+    """
+    # Create a pipeline object for the RealSense depth sensor
+    pipeline = rs.pipeline()
+
+    # Create a configuration object for the pipeline
+    config = rs.config()
+
+    # Enable the depth stream
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+
+    # Start the pipeline
+    profile = pipeline.start(config)
+
+    try:
+        # Wait for a coherent pair of frames: depth and color
+        frames = pipeline.wait_for_frames()
+        depth_frame = frames.get_depth_frame()
+
+        # Convert the depth frame to a numpy array
+        depth_image = np.asanyarray(depth_frame.get_data())
+
+        # Resize the depth image to match the size of the color image
+        resized_depth_image = cv2.resize(depth_image, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+        return resized_depth_image
+
+    finally:
+        # Stop the pipeline
+        pipeline.stop()
+
 
 
 def change_brightness(image, brightness_factor):
@@ -512,3 +484,5 @@ def change_brightness(image, brightness_factor):
     hsv = np.array(hsv, dtype=np.uint8)
     image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     return image
+
+

@@ -12,6 +12,10 @@ import torch.nn.functional as F
 from django.http import HttpResponse, HttpResponseBadRequest
 from PIL import Image
 import math
+from threading import Event
+
+
+# python3 manage.py runserver 192.168.181.129:8000
 
 
 #Per testare lo stato in modo semplice la connessione all'api.
@@ -24,6 +28,19 @@ def connection_api(request):
             return HttpResponse('Error during API request')
         except ValueError:
             return HttpResponse('Invalid response format')
+    else:
+        return HttpResponse('Invalid request method')
+
+
+
+
+#       **********            STOP Process Image           **********
+stop_event = Event()
+def stop_processing(request):
+    if request.method == 'GET':
+        stop_event.set()
+        print("Stopped")
+        return HttpResponse('Processing stopped')
     else:
         return HttpResponse('Invalid request method')
 
@@ -53,7 +70,9 @@ def process_image(request):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.to(device)
 
-        while True:
+
+        while not stop_event.is_set():
+
             frame = capture_image(request=None)
 
             # Rileva la persona nell'immagine

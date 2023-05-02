@@ -20,6 +20,8 @@ from .views import update_model
 
 urlpatterns = [
     path('process_image/', views.process_image, name='process_image'),
+    path('stop_processing/', views.update_model, name='stop_processing'),
     path('connection_api/', views.connection_api, name='connection_api'),
     path('update_model/', views.update_model, name='update_model'),
+
 ]

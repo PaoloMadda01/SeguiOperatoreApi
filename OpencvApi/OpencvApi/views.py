@@ -71,7 +71,7 @@ def process_image(request):
         model.to(device)
 
 
-        while not stop_event.is_set():
+        while True:
 
             frame = capture_image(request=None)
 

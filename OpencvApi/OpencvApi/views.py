@@ -412,8 +412,9 @@ def crop_back(image):
     if isinstance(results, list):
         results = results[0]
 
+    
     # Estrae le coordinate del bounding box della parte posteriore della persona
-    bboxes = results.xywh[0].cpu().numpy()
+    bboxes = results.boxes.cpu().numpy()
     for bbox in bboxes:
         if bbox[5] == 0:  # Se l'oggetto rilevato è una persona
             x, y, w, h = bbox[:4].astype(int)
@@ -432,8 +433,6 @@ def crop_back(image):
         # Restituisci un errore se sono state trovate più o nessuna parte
         print("Unable to detect back or lower body")
         raise Exception('Unable to detect back or lower body')
-
-
 
 
 

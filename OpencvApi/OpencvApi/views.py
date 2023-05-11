@@ -413,7 +413,7 @@ def crop_back(image):
         results = results[0]
 
     # Estrae le coordinate del bounding box della parte posteriore della persona
-    bboxes = results.xyxy[0].cpu().numpy()
+    bboxes = results.xywh[0].cpu().numpy()
     for bbox in bboxes:
         if bbox[5] == 0:  # Se l'oggetto rilevato è una persona
             x, y, w, h = bbox[:4].astype(int)

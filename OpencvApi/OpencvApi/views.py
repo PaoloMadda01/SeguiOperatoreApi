@@ -408,6 +408,9 @@ def crop_back(image):
 
     # Utilizza il modello YOLOv5 per rilevare la parte posteriore della persona
     results = model(image)
+    
+    if isinstance(results, list):
+        results = results[0]
 
     # Estrae le coordinate del bounding box della parte posteriore della persona
     bboxes = results.xyxy[0].cpu().numpy()

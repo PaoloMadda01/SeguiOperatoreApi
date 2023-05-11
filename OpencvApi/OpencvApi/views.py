@@ -403,7 +403,7 @@ def retrain_model(model, photo_now):
 
 def crop_back(image):
     # Carica il modello YOLOv5
-    model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+    model = torch.hub.load('ultralytics/yolov8', 'yolov8', pretrained=True)
 
     # Utilizza il modello YOLOv5 per rilevare la parte posteriore della persona
     results = model(image, size=640)

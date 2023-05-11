@@ -14,6 +14,7 @@ from PIL import Image
 import math
 from threading import Event
 import multiprocessing as mp
+from ultralytics import YOLO
 
 
 # python3 manage.py runserver 192.168.181.129:8000
@@ -403,7 +404,7 @@ def retrain_model(model, photo_now):
 
 def crop_back(image):
     # Carica il modello YOLOv5
-    model = torch.hub.load('ultralytics/yolov8', 'yolov8', pretrained=True)
+    model = YOLO('yolov8n.yaml')
 
     # Utilizza il modello YOLOv5 per rilevare la parte posteriore della persona
     results = model(image, size=640)

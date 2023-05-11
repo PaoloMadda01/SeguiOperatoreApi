@@ -13,6 +13,7 @@ from django.http import HttpResponse, HttpResponseBadRequest
 from PIL import Image
 import math
 from threading import Event
+import multiprocessing as mp
 
 
 # python3 manage.py runserver 192.168.181.129:8000
@@ -48,7 +49,6 @@ def stop_processing(request):
 
 
 #       **********            Process Image           **********
-
 def process_image(request):
     if request.method == 'POST':
         print('POST requested')
@@ -61,60 +61,40 @@ def process_image(request):
             model_file = request.FILES['model']
             model = torch.load(model_file)
 
-        # Define the transformations to be applied to the image
-        transform = transforms.Compose([
-            transforms.Resize((640, 480)),  # Ridimensiona l'immagine a una risoluzione di 640x480
-            transforms.ToTensor(),  # Converte l'immagine in un tensore PyTorch
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalizza l'immagine
-        ])
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.to(device)
 
+        # Crea la coda dei lavori da elaborare in parallelo
+        jobs = mp.Queue()
 
-        while True:
+        # Crea i processi di elaborazione
+        num_processes = mp.cpu_count() - 1
+        processes = [mp.Process(target=process_job, args=(jobs, i, model, device)) for i in range(num_processes)]
 
+        # Avvia i processi
+        for process in processes:
+            process.start()
+
+        while not stop_event.is_set():
             frame = capture_image(request=None)
-
-            # Rileva la persona nell'immagine
             bbox = detect_person(frame)
 
             if bbox is not None:
-                # Ritaglia l'immagine del tronco/schiena utilizzando il bbox rilevato
-                x, y, w, h = bbox
-
-                image = frame[y:y + h, x:x + w]
-
-                # Converti l'immagine in un tensore PyTorch e applica le trasformazioni
-                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
-                image = Image.fromarray(image)  # Convert the image to a PIL image
-                image = transform(image).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
-
-                # Utilizza il modello per effettuare una predizione
-                with torch.no_grad():
-                    model.eval()
-                    outputs = model(image)
-                    predicted = F.softmax(outputs, dim=1)
-
-                # Ottieni il valore di probabilità della classe positiva (indice 1)
-                positive_prob = predicted[0][1].item()
-
-                # Stampa i valori di probabilità predetti
-                #print(f"Predicted probabilities: {predicted}")
-
-                # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
-                threshold = 0.0009
-                if positive_prob > threshold:
-                    #print("Predicted!")
-                    x_coordinate, y_coordinate, distance = follow_person(image, bbox)
-                    # Print the distance and the coordinates of the person
-                    print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {distance})")
+                # Aggiungi il lavoro alla coda
+                jobs.put((frame, bbox))
 
             # Se viene premuto il tasto 'q', interrompi il ciclo while
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-        # Rilascia le risorse
-        #pipeline.stop()
+        # Aggiungi un messaggio di terminazione per ogni processo
+        for i in range(num_processes):
+            jobs.put(None)
+
+        # Attendi la terminazione dei processi
+        for process in processes:
+            process.join()
+
         # Chiudi tutte le finestre di OpenCV
         cv2.destroyAllWindows()
 
@@ -124,6 +104,58 @@ def process_image(request):
     else:
         # Se la richiesta non è una POST, ritorna una HttpResponseBadRequest
         return HttpResponseBadRequest('Invalid request method')
+
+
+
+def process_job(jobs, process_id, model, device):
+    """
+    Funzione eseguita da ogni processo per elaborare i lavori in parallelo.
+    """
+    # Preleva un lavoro dalla coda
+    job = jobs.get()
+
+    frame, bbox = job
+    x_coordinate, y_coordinate, distance = predict_image(bbox, frame, model, device)
+
+    # Print the distance and the coordinates of the person
+    print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) Core: ({process_id}")
+
+
+def predict_image(bbox, frame, model):
+    # Define the transformations to be applied to the image
+    transform = transforms.Compose([
+        transforms.Resize((640, 480)),  # Ridimensiona l'immagine a una risoluzione di 640x480
+        transforms.ToTensor(),  # Converte l'immagine in un tensore PyTorch
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalizza l'immagine
+    ])
+
+    # Ritaglia l'immagine del tronco/schiena utilizzando il bbox rilevato
+    x, y, w, h = bbox
+
+    image = frame[y:y + h, x:x + w]
+
+    # Converti l'immagine in un tensore PyTorch e applica le trasformazioni
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
+    image = Image.fromarray(image)  # Convert the image to a PIL image
+    image = transform(image).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
+
+    # Utilizza il modello per effettuare una predizione
+    with torch.no_grad():
+        model.eval()
+        outputs = model(image)
+        predicted = F.softmax(outputs, dim=1)
+
+    # Ottieni il valore di probabilità della classe positiva (indice 1)
+    positive_prob = predicted[0][1].item()
+
+    # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
+    threshold = 0.0009
+    if positive_prob > threshold:
+        # print("Predicted!")
+        x_coordinate, y_coordinate, distance = follow_person(image, bbox)
+
+    return(x_coordinate, y_coordinate, distance)
+
 
 
 

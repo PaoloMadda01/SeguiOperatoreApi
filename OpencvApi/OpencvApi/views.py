@@ -403,10 +403,10 @@ def retrain_model(model, photo_now):
 
 
 def crop_back(image):
-    # Carica il modello YOLOv5
+    # Carica il modello YOLOv8
     model = YOLO('yolov8n.yaml')
 
-    # Utilizza il modello YOLOv5 per rilevare la parte posteriore della persona
+    # Utilizza il modello YOLOv8 per rilevare la parte posteriore della persona
     results = model(image)
     
     if isinstance(results, list):
@@ -424,7 +424,7 @@ def crop_back(image):
             cropped_image = cv2.resize(cropped_image, (224, 225))
 
             print("Image is good")
-            print("Try with YOLOv5 - full body")
+            print("Try with YOLOv8 - full body")
 
             return cropped_image
 

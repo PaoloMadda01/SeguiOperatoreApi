@@ -80,9 +80,10 @@ def process_image(request):
             frame = capture_image(request=None)
             bbox = detect_person(frame)
 
-            if bbox is not None:
+            #if bbox is not None:
                 # Aggiungi il lavoro alla coda
-                jobs.put((frame, bbox))
+                #predict_image(bbox, frame, model)
+                #jobs.put((frame, bbox))
 
             # Se viene premuto il tasto 'q', interrompi il ciclo while
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -150,34 +151,15 @@ def predict_image(bbox, frame, model):
     positive_prob = predicted[0][1].item()
 
     # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
-    threshold = 0.0009
+    threshold = 0.0000009
     if positive_prob > threshold:
-        # print("Predicted!")
-        x_coordinate, y_coordinate, distance = follow_person(image, bbox)
+        print("Predicted!")
+        x_coordinate, y_coordinate, distance = calculate_coordinates(image, bbox)
+        print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {distance}")
 
     return(x_coordinate, y_coordinate, distance)
 
 
-
-
-def follow_person(image, bbox):
-    # Get the center point of the bounding box
-    x_center = (bbox[0] + bbox[2]) / 2
-    y_center = (bbox[1] + bbox[3]) / 2
-
-    # Get the dimensions of the image
-    height = image.shape[3]
-    width = image.shape[2]
-    channels = image.shape[1]
-
-    # Calculate the x and y coordinates of the center point of the bounding box as a percentage of the image size
-    x_percent = x_center / width
-    y_percent = y_center / height
-
-    # Calculate the distance and the coordinates of the person
-    x_coordinate, y_coordinate, distance = calculate_coordinates(image, bbox)
-
-    return(x_percent, y_percent, distance)
 
 def calculate_coordinates(image, bbox):
     # Acquisisce il frame della profondità dall'immagine
@@ -219,46 +201,32 @@ def calculate_coordinates(image, bbox):
 
 # Cerca la persona e crea la bbox di essa
 def detect_person(frame):
-    # Carica il modello YOLOv5
-    model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+    # Load the YOLOv8 model
+    model = YOLO('yolov8n.pt')
+    bbox = None
 
-    # Utilizza il modello YOLOv5 per rilevare la parte posteriore della persona
-    results = model(frame, size=640)
+    # Use the YOLOv8 model to detect objects in the image
+    results = model(frame)
+    if len(results) > 0:
+        for result in results:
+            boxes = result.boxes.cpu().numpy()
+            for box in boxes:
+                if box.conf[0] > 0.5:
+                    r = box.xyxy[0].astype(int)
+                    bbox = (r[0], r[1], r[2], r[3])
 
-    # Inizializza le liste per le scatole rilevate, le confidenze e le classi
-    boxes = []
-    confidences = []
-    class_ids = []
+                    print("Predicted!")
+                    x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
+                    print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {distance}")
+                    break
 
-    # Imposta i parametri di confidenza e non massima soppressione
-    conf_threshold = 0.5
-    iou_threshold = 0.4
-
-    # Analizza gli output della rete YOLOv5
-
-    for detection in results.xyxy[0]:
-        # Ottiene le informazioni sulla classe, la confidenza e le coordinate della scatola
-        class_id = detection[-1]
-        confidence = detection[-2]
-        if confidence > conf_threshold and class_id == 0:  # Class ID 0: persona
-            x, y, w, h = detection[:4].cpu().numpy().astype(int)  # Converte il tensore in un array NumPy e utilizza il metodo astype
-            boxes.append([x, y, w, h])
-            confidences.append(float(confidence))
-            class_ids.append(class_id)
-    # Applica la non massima soppressione per rimuovere le sovrapposizioni
-    indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, iou_threshold)
-
-    # Crea il bounding box per la persona rilevata
-    if len(indices) > 0:
-        #print("Person detected")
-        i = indices[0]
-        x, y, w, h = boxes[i]
-        bbox = (x, y, x + w, y + h)
-    else:
-        bbox = None
+    if bbox is None:
         print("No person detected")
 
     return bbox
+
+
+
 
 
 
@@ -271,11 +239,9 @@ def update_model(request):
 
         # Verifica se l'immagine è stata acquisita correttamente
         if photo_now is not None:
-            # Ridimensiona l'immagine
-            photo_now = cv2.resize(photo_now, (640, 480))
 
             # Elabora l'immagine per rilevare la parte posteriore o inferiore del corpo
-            cropped_image = crop_back(photo_now)
+            cropped_image = crop_person(photo_now)
 
 
             ## *** Model ***
@@ -402,37 +368,39 @@ def retrain_model(model, photo_now):
     return model
 
 
-def crop_back(image):
-    # Carica il modello YOLOv8
-    model = YOLO('yolov8n.yaml')
+def crop_person(image):
+    # Load the YOLOv8 model
+    model = YOLO('yolov8n.pt')
+    cropped_image = None
+    person_count = 0
 
-    # Utilizza il modello YOLOv8 per rilevare la parte posteriore della persona
+    # Use the YOLOv8 model to detect objects in the image
     results = model(image)
-    
-    if isinstance(results, list):
-        results = results[0]
+    for result in results:
+        boxes = result.boxes.cpu().numpy()
+        for box in boxes:
+            if box.conf[0] > 0.5:
+                r = box.xyxy[0].astype(int)
+                cropped_image = image[r[1]:r[3], r[0]:r[2]]
+                person_count += 1
+                if person_count > 1:
+                    print("Error: More than one person detected")
+                    return None
 
-    
-    # Estrae le coordinate del bounding box della parte posteriore della persona
-    bboxes = results.boxes.cpu().numpy()
-    for bbox in bboxes:
-        if bbox[5] == 0:  # Se l'oggetto rilevato è una persona
-            x, y, w, h = bbox[:4].astype(int)
-            cropped_image = image[y:y + h, x:x + w]
 
-            # Adatta le immagini alla stessa dimensione
-            cropped_image = cv2.resize(cropped_image, (224, 225))
+    # Resize images to the same size
+    # Check if cropped_image has a valid value before using it
+    if cropped_image is not None:
+        # Resize images to the same size
+        cropped_image = cv2.resize(cropped_image, (224, 225))
 
-            print("Image is good")
-            print("Try with YOLOv8 - full body")
-
-            return cropped_image
-
+        print("Image is good")
+        print("Try with YOLOv8 - full body")
+        return cropped_image
 
     else:
-        # Restituisci un errore se sono state trovate più o nessuna parte
-        print("Unable to detect back or lower body")
-        raise Exception('Unable to detect back or lower body')
+        print("Error: No valid bounding boxes found")
+        raise Exception('Unable to detect body')
 
 
 

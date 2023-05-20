@@ -114,7 +114,7 @@ def process_job(jobs, process_id, model, device):
     Funzione eseguita da ogni processo per elaborare i lavori in parallelo.
     """
     # Preleva un lavoro dalla coda
-    job = jobs.get()
+    #job = jobs.get()
 
     frame, bbox = job
     x_coordinate, y_coordinate, distance = predict_image(bbox, frame, model, device)

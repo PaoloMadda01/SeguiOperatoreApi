@@ -15,7 +15,7 @@ import math
 from threading import Event
 import multiprocessing as mp
 from ultralytics import YOLO
-
+import asyncio
 
 # python3 manage.py runserver 192.168.181.129:8000
 
@@ -50,7 +50,7 @@ def stop_processing(request):
 
 
 #       **********            Process Image           **********
-def process_image(request):
+async def process_image(request):
     if request.method == 'POST':
         print('POST requested')
 
@@ -77,13 +77,21 @@ def process_image(request):
             process.start()
 
         while not stop_event.is_set():
-            frame = capture_image(request=None)
-            bbox = detect_person(frame)
 
-            #if bbox is not None:
-                # Aggiungi il lavoro alla coda
-                #predict_image(bbox, frame, model)
-                #jobs.put((frame, bbox))
+            try:
+                frame = await capture_image_async()
+                bbox = detect_person(frame)
+                if bbox is not None:
+                    x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
+                    print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
+
+            except RuntimeError as e:
+                print(f"Error processing job: {e}")
+
+
+
+            # Aggiungi il lavoro alla coda
+            jobs.put((frame))  # Passa le informazioni necessarie come una tupla
 
             # Se viene premuto il tasto 'q', interrompi il ciclo while
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -108,19 +116,39 @@ def process_image(request):
         return HttpResponseBadRequest('Invalid request method')
 
 
-
 def process_job(jobs, process_id, model, device):
     """
     Funzione eseguita da ogni processo per elaborare i lavori in parallelo.
     """
-    # Preleva un lavoro dalla coda
-    #job = jobs.get()
 
-    frame, bbox = job
-    x_coordinate, y_coordinate, distance = predict_image(bbox, frame, model, device)
+    async def async_process_job(jobs, process_id, model, device):
+        while True:
+            # Preleva un lavoro dalla coda
+            job = jobs.get()
 
-    # Print the distance and the coordinates of the person
-    print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) Core: ({process_id}")
+            # Se viene passato il segnale di terminazione, interrompi il ciclo
+            if job is None:
+                break
+
+            bbox = None
+            try:
+                print(f"Core: {process_id}")
+                frame = await capture_image_async()
+                bbox = detect_person(frame)
+                if bbox is not None:
+                    x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
+                    print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
+
+            except RuntimeError as e:
+                print(f"Error processing job: {e}")
+
+    asyncio.run(async_process_job(jobs, process_id, model, device))
+
+
+
+
+
+
 
 
 def predict_image(bbox, frame, model):
@@ -214,10 +242,7 @@ def detect_person(frame):
                 if box.conf[0] > 0.5:
                     r = box.xyxy[0].astype(int)
                     bbox = (r[0], r[1], r[2], r[3])
-
                     print("Predicted!")
-                    x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
-                    print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {distance}")
                     break
 
     if bbox is None:
@@ -405,6 +430,22 @@ def crop_person(image):
 
 
 #       **********            UTILITIES           **********
+
+async def capture_image_async():
+
+    while True:
+        try:
+            frame = capture_image(request=None)
+            return frame
+        except RuntimeError as e:
+            if "Device or resource busy" in str(e):
+                # Attendi per un breve periodo di tempo e riprova
+                await asyncio.sleep(0.01)
+            else:
+                # Gestisci altri errori in modo appropriato
+                raise
+
+
 def capture_image(request):
     # Verifica la presenza di una fotocamera Intel RealSense collegata tramite USB
     ctx = rs.context()

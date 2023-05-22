@@ -85,7 +85,7 @@ async def process_image(request):
                     x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
                     print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
 
-            except RuntimeError as e:
+             except RuntimeError as e:
                 print(f"Error processing job: {e}")
 
 

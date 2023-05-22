@@ -17,6 +17,8 @@ import multiprocessing as mp
 from ultralytics import YOLO
 import asyncio
 
+# python3 manage.py runserver 192.168.181.129:8000
+
 
 #Per testare lo stato in modo semplice la connessione all'api.
 #Se restituisce 'Ok' allora c'è connessione e il server  online
@@ -35,20 +37,14 @@ def connection_api(request):
 
 
 #       **********            STOP Process Image           **********
+stop_event = Event()
 def stop_processing(request):
     if request.method == 'GET':
-        try:
-            print("Stopped")
-            stop_event = Event()
-            stop_event.set()
-            return JsonResponse({'Status': 'Ok'})
-        except requests.exceptions.RequestException:
-            return HttpResponse('Error during API request')
-        except ValueError:
-            return HttpResponse('Invalid response format')
+        stop_event.set()
+        print("Stopped")
+        return HttpResponse('Processing stopped')
     else:
         return HttpResponse('Invalid request method')
-
 
 
 
@@ -80,21 +76,20 @@ async def process_image(request):
         for process in processes:
             process.start()
 
-        stop_event = Event()
-        ### WHILE LOOP ###
         while not stop_event.is_set():
 
-             try:
+            try:
                 frame = await capture_image_async()
                 bbox = detect_person(frame)
                 if bbox is not None:
                     x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
-                    print(f"____________ Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
+                    print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
 
             except RuntimeError as e:
                 print(f"Error processing job: {e}")
-                
-                
+
+
+
             # Aggiungi il lavoro alla coda
             jobs.put((frame))  # Passa le informazioni necessarie come una tupla
 

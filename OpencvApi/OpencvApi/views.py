@@ -84,8 +84,19 @@ async def process_image(request):
         ### WHILE LOOP ###
         while not stop_event.is_set():
 
+             try:
+                frame = await capture_image_async()
+                bbox = detect_person(frame)
+                if bbox is not None:
+                    x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
+                    print(f"____________ Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
+
+            except RuntimeError as e:
+                print(f"Error processing job: {e}")
+                
+                
             # Aggiungi il lavoro alla coda
-            jobs.put()  # Passa le informazioni necessarie come una tupla
+            jobs.put((frame))  # Passa le informazioni necessarie come una tupla
 
             # Se viene premuto il tasto 'q', interrompi il ciclo while
             if cv2.waitKey(1) & 0xFF == ord('q'):

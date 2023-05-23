@@ -65,6 +65,9 @@ async def process_image(request):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.to(device)
 
+        # Load the YOLOv8 model
+        model = YOLO('yolov8n.pt')
+
         # Crea la coda dei lavori da elaborare in parallelo
         jobs = mp.Queue()
 
@@ -80,15 +83,13 @@ async def process_image(request):
 
             try:
                 frame = await capture_image_async()
-                bbox = detect_person(frame)
+                bbox = detect_person(frame, model)
                 if bbox is not None:
                     x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
                     print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
 
             except RuntimeError as e:
                 print(f"Error processing job: {e}")
-
-
 
             # Aggiungi il lavoro alla coda
             jobs.put((frame))  # Passa le informazioni necessarie come una tupla
@@ -134,7 +135,7 @@ def process_job(jobs, process_id, model, device):
             try:
                 print(f"Core: {process_id}")
                 frame = await capture_image_async()
-                bbox = detect_person(frame)
+                bbox = detect_person(frame, model)
                 if bbox is not None:
                     x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
                     print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
@@ -228,9 +229,7 @@ def calculate_coordinates(image, bbox):
 
 
 # Cerca la persona e crea la bbox di essa
-def detect_person(frame):
-    # Load the YOLOv8 model
-    model = YOLO('yolov8n.pt')
+def detect_person(frame, model):
     bbox = None
 
     # Use the YOLOv8 model to detect objects in the image

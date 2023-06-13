@@ -16,6 +16,7 @@ from threading import Event
 import multiprocessing as mp
 from ultralytics import YOLO
 import asyncio
+import os
 
 # python3 manage.py runserver 192.168.181.129:8000
 
@@ -63,6 +64,7 @@ async def process_image(request):
             model = torch.load(model_file)
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print("Device: ", device)
         model.to(device)
 
         # Load the YOLOv8 model
@@ -268,10 +270,18 @@ def update_model(request):
             cropped_image = crop_person(photo_now)
 
 
+            # Verifica e assegna l'idice della foto per l'addestramento
+            if 'indexPhoto' not in request.FILES:
+                indexPhoto = 1
+            else:
+                # Leggi i dati binari del file del modello
+                indexPhoto = int(request.FILES['indexPhoto'].read())  # Leggi l'indice come intero
+
             ## *** Model ***
             # Verifica se il file del modello è presente nella richiesta
             if 'model' not in request.FILES:
                 model = None
+                indexPhoto = 0
             else:
                 # Leggi i dati binari del file del modello
                 model = request.FILES['model'].read()
@@ -282,16 +292,16 @@ def update_model(request):
                 # Se il file non esiste, crea un nuovo modello vuoto
                 print("Create new model")
                 model = create_new_model()
-                model = retrain_method(model, cropped_image)
+                model = retrain_method(model, cropped_image, indexPhoto)
             else:
                 try:
                     # Prova a caricare il file del modello esistente
                     model = torch.load(io.BytesIO(model))
-                    model = retrain_method(model, cropped_image)
+                    model = retrain_method(model, cropped_image, indexPhoto)
                 except (IOError, RuntimeError):
                     # Se ci sono problemi con il file del modello esistente, crea un nuovo modello vuoto
                     model = create_new_model()
-                    model = retrain_method(model, cropped_image)
+                    model = retrain_method(model, cropped_image, indexPhoto)
 
             # Serializza il modello come bytes usando io.BytesIO e torch.save
             buffer = io.BytesIO()
@@ -321,34 +331,46 @@ def create_new_model():
 
     return model
 
-def retrain_method(model, photo_now):
-    model = retrain_model(model, photo_now)
-    for i in range(1, 6):
-        model = retrain_model(model, photo_now)
-    print("photo flipped 1")
-    #for i in range(1, 6):
-        # flipped_image = cv2.flip(photo_now, i)
-        # model = retrain_model(model, flipped_image)
-    print("flip photo 2")
-    #for i in range(5, 0, -1):
-        # flipped_image = cv2.flip(photo_now, i)
-        # model = retrain_model(model, flipped_image)
-    print("photo brighter")
-    for i in range(1, 3):
-        bright_image = change_brightness(photo_now, i)
-        model = retrain_model(model, bright_image)
-    print("photo less bright")
-    for i in range(2, 0, -1):
-        bright_image = change_brightness(photo_now, i)
-        model = retrain_model(model, bright_image)
+def retrain_method(model, photo_now, indexPhoto):
+
+    folder_number = ((indexPhoto) % 8) + 1
+    print("Folder numeber: ", folder_number)
+    photo_folder = f"/home/tw/Desktop/FotoPersone/{folder_number}/"  # Nome della cartella corrispondente
+    photo_files = os.listdir(photo_folder)  # Elenco dei file nella cartella
+    photo_files.sort()  # Ordinamento dei file nella cartella
+
+    for photo_file in photo_files:
+        photo_path = os.path.join(photo_folder, photo_file)
+        photo_incorrect = Image.open(photo_path)
+
+        print("***  Start with another incorrect photo  ***")
+        model = retrain_model(model, photo_now, photo_incorrect)
+
+        print("Data augmentation")
+        transformed_images_corrects = data_augmentation(photo_now)
+        transformed_images_incorrects = data_augmentation(photo_incorrect)
+        for transformed_images_correct in transformed_images_corrects:
+            for transformed_images_incorrect in transformed_images_incorrects:
+                model = retrain_model(model, transformed_images_correct, transformed_images_incorrect)
+
+
+        print("photo brighter")
+        for i in range(1, 3):
+            bright_image = change_brightness(photo_now, i)
+            model = retrain_model(model, bright_image, photo_incorrect)
+        print("photo less bright")
+        for i in range(2, 0, -1):
+            bright_image = change_brightness(photo_now, i)
+            model = retrain_model(model, bright_image, photo_incorrect)
 
     return model
 
 
 
 
-def retrain_model(model, photo_now):
+def retrain_model(model, photo_now, photo_incorrect):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print("Device: ", device)
     model.to(device)
 
     # Define the transformations to be applied to the image
@@ -360,22 +382,25 @@ def retrain_model(model, photo_now):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    # Convert the image from BGR to RGB
-    image = photo_now[:, :, [2, 1, 0]]  # Swap the order of the channels from BGR to RGB
+    # Convert the correct image from BGR to RGB
+    image_now = photo_now[:, :, [2, 1, 0]]  # Swap the order of the channels from BGR to RGB
+    image_now = Image.fromarray(image_now)
+    img_tensor_now = transform(image_now).unsqueeze(0)
+    dataset_now = torch.utils.data.TensorDataset(img_tensor_now, torch.tensor([1]))  # Assign label 1 to correct image
 
-    # Convert the image from numpy array to PIL image
-    image = Image.fromarray(image)
+    # Convert the incorrect image from BGR to RGB
+    image_incorrect = photo_incorrect[:, :, [2, 1, 0]]  # Swap the order of the channels from BGR to RGB
+    image_incorrect = Image.fromarray(image_incorrect)
+    img_tensor_incorrect = transform(image_incorrect).unsqueeze(0)
+    dataset_incorrect = torch.utils.data.TensorDataset(img_tensor_incorrect, torch.tensor([0]))  # Assign label 0 to incorrect image
 
-    # Convert the image to a PyTorch tensor and apply transformations with cv2
-    # Apply the transformations to the image
-    img_tensor = transform(image).unsqueeze(0)
-    # Crea un oggetto di tipo TensorDataset utilizzando l'immagine img_tensor come input e un valore costante 0 come output.
-    dataset = torch.utils.data.TensorDataset(img_tensor, torch.tensor([0]))
+    # Combine the datasets for training
+    combined_dataset = torch.utils.data.ConcatDataset([dataset_now, dataset_incorrect])
 
-    # Addestramento del modello
+    # Training the model
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-    train_loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
+    train_loader = torch.utils.data.DataLoader(combined_dataset, batch_size=1, shuffle=True)
     for epoch in range(5):
         running_loss = 0.0
         for i, data in enumerate(train_loader, 0):
@@ -390,6 +415,7 @@ def retrain_model(model, photo_now):
         print(f"Epoch {epoch + 1} loss: {running_loss / len(train_loader)}")
 
     return model
+
 
 
 def crop_person(image):
@@ -527,6 +553,54 @@ def get_depth_frame(frame):
     finally:
         # Stop the pipeline
         pipeline.stop()
+
+
+
+
+
+
+
+
+def data_augmentation(image):
+    # Conversione da PIL a cv2
+    image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+
+    transformed_images = []
+
+    # Rotazione dell'immagine
+    angle = 10
+    rows, cols, _ = image.shape
+    M_rotation = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 1)
+    rotated_image = cv2.warpAffine(image, M_rotation, (cols, rows))
+    transformed_images.append(rotated_image)
+
+    # Ridimensionamento dell'immagine
+    scale_percent = 110
+    width = int(image.shape[1] * scale_percent / 100)
+    height = int(image.shape[0] * scale_percent / 100)
+    dim = (width, height)
+    resized_image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
+    transformed_images.append(resized_image)
+
+    # Traslazione dell'immagine
+    x_translation = 20
+    y_translation = 20
+    M_translation = np.float32([[1, 0, x_translation], [0, 1, y_translation]])
+    translated_image = cv2.warpAffine(image, M_translation, (cols, rows))
+    transformed_images.append(translated_image)
+
+    # Riduzione della saturazione
+    transformed_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    transformed_image[:, :, 1] = 0.5 * transformed_image[:, :, 1]
+    transformed_image = cv2.cvtColor(transformed_image, cv2.COLOR_HSV2RGB)
+    transformed_images.append(transformed_image)
+
+    # Applicazione del filtro di sfocatura
+    transformed_image = cv2.GaussianBlur(image, (5, 5), 0)
+    transformed_images.append(transformed_image)
+
+    return transformed_images
+
 
 
 

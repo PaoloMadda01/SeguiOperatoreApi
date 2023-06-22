@@ -335,14 +335,12 @@ def retrain_method(model, photo_now, indexPhoto):
 
     folder_number = ((indexPhoto) % 8) + 1
     print("Folder numeber: ", folder_number)
-    photo_folder = f"/home/tw/Desktop/FotoPersone/{folder_number}/"  # Nome della cartella corrispondente
+    photo_folder = f"C:\\Users\\MadSox\\Desktop\\FotoPersone\\{folder_number}/"  # Nome della cartella corrispondente
     photo_files = os.listdir(photo_folder)  # Elenco dei file nella cartella
     photo_files.sort()  # Ordinamento dei file nella cartella
-
     for photo_file in photo_files:
         photo_path = os.path.join(photo_folder, photo_file)
         photo_incorrect = Image.open(photo_path)
-
         print("***  Start with another incorrect photo  ***")
         model = retrain_model(model, photo_now, photo_incorrect)
 
@@ -363,6 +361,7 @@ def retrain_method(model, photo_now, indexPhoto):
             bright_image = change_brightness(photo_now, i)
             model = retrain_model(model, bright_image, photo_incorrect)
 
+        print("111")
     return model
 
 
@@ -382,14 +381,21 @@ def retrain_model(model, photo_now, photo_incorrect):
                              std=[0.229, 0.224, 0.225])
     ])
 
+    print("2")
+    photo_now = cv2.imread(photo_now)
     # Convert the correct image from BGR to RGB
     image_now = photo_now[:, :, [2, 1, 0]]  # Swap the order of the channels from BGR to RGB
+    print("3")
     image_now = Image.fromarray(image_now)
+    print("4")
     img_tensor_now = transform(image_now).unsqueeze(0)
+    print("5")
     dataset_now = torch.utils.data.TensorDataset(img_tensor_now, torch.tensor([1]))  # Assign label 1 to correct image
+    print("6")
 
     # Convert the incorrect image from BGR to RGB
     image_incorrect = photo_incorrect[:, :, [2, 1, 0]]  # Swap the order of the channels from BGR to RGB
+    print("7")
     image_incorrect = Image.fromarray(image_incorrect)
     img_tensor_incorrect = transform(image_incorrect).unsqueeze(0)
     dataset_incorrect = torch.utils.data.TensorDataset(img_tensor_incorrect, torch.tensor([0]))  # Assign label 0 to incorrect image

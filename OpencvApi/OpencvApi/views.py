@@ -341,6 +341,7 @@ def retrain_method(model, photo_now, indexPhoto):
     for photo_file in photo_files:
         photo_path = os.path.join(photo_folder, photo_file)
         photo_incorrect = Image.open(photo_path)
+
         print("***  Start with another incorrect photo  ***")
         model = retrain_model(model, photo_now, photo_incorrect)
 
@@ -385,15 +386,14 @@ def retrain_model(model, photo_now, photo_incorrect):
     image = cv2.cvtColor(photo_now, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
     image = Image.fromarray(image)  # Convert the image to a PIL image
     img_tensor_now = transform(image).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
-
+    # Etichetta positivo
     dataset_now = torch.utils.data.TensorDataset(img_tensor_now, torch.tensor([1]))  # Assign label 1 to correct imag
 
-
-
-    image_incorrect = cv2.cvtColor(photo_incorrect, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
+    image_incorrect = np.asarray(photo_incorrect)
+    image_incorrect = cv2.cvtColor(image_incorrect, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
     image_incorrect = Image.fromarray(image_incorrect)  # Convert the image to a PIL image
     img_tensor_incorrect = transform(image_incorrect).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
-
+    # Etichetta negativo
     dataset_incorrect = torch.utils.data.TensorDataset(img_tensor_incorrect, torch.tensor([0]))  # Assign label 0 to incorrect image
 
     # Combine the datasets for training
@@ -577,19 +577,19 @@ def data_augmentation(image):
     transformed_images.append(rotated_image)
 
     # Ridimensionamento dell'immagine
-    scale_percent = 110
-    width = int(image.shape[1] * scale_percent / 100)
-    height = int(image.shape[0] * scale_percent / 100)
-    dim = (width, height)
-    resized_image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
-    transformed_images.append(resized_image)
+    # scale_percent = 110
+    # width = int(image.shape[1] * scale_percent / 100)
+    # height = int(image.shape[0] * scale_percent / 100)
+    # dim = (width, height)
+    # resized_image = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
+    # transformed_images.append(resized_image)
 
     # Traslazione dell'immagine
-    x_translation = 20
-    y_translation = 20
-    M_translation = np.float32([[1, 0, x_translation], [0, 1, y_translation]])
-    translated_image = cv2.warpAffine(image, M_translation, (cols, rows))
-    transformed_images.append(translated_image)
+    # x_translation = 20
+    # y_translation = 20
+    # M_translation = np.float32([[1, 0, x_translation], [0, 1, y_translation]])
+    # translated_image = cv2.warpAffine(image, M_translation, (cols, rows))
+    # transformed_images.append(translated_image)
 
     # Riduzione della saturazione
     transformed_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)

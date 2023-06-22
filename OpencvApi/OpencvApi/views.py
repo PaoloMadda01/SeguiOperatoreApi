@@ -381,23 +381,19 @@ def retrain_model(model, photo_now, photo_incorrect):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    print("2")
-    photo_now = cv2.imread(photo_now)
-    # Convert the correct image from BGR to RGB
-    image_now = photo_now[:, :, [2, 1, 0]]  # Swap the order of the channels from BGR to RGB
-    print("3")
-    image_now = Image.fromarray(image_now)
-    print("4")
-    img_tensor_now = transform(image_now).unsqueeze(0)
-    print("5")
-    dataset_now = torch.utils.data.TensorDataset(img_tensor_now, torch.tensor([1]))  # Assign label 1 to correct image
-    print("6")
+    # Converti l'immagine in un tensore PyTorch e applica le trasformazioni
+    image = cv2.cvtColor(photo_now, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
+    image = Image.fromarray(image)  # Convert the image to a PIL image
+    img_tensor_now = transform(image).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
 
-    # Convert the incorrect image from BGR to RGB
-    image_incorrect = photo_incorrect[:, :, [2, 1, 0]]  # Swap the order of the channels from BGR to RGB
-    print("7")
-    image_incorrect = Image.fromarray(image_incorrect)
-    img_tensor_incorrect = transform(image_incorrect).unsqueeze(0)
+    dataset_now = torch.utils.data.TensorDataset(img_tensor_now, torch.tensor([1]))  # Assign label 1 to correct imag
+
+
+
+    image_incorrect = cv2.cvtColor(photo_incorrect, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
+    image_incorrect = Image.fromarray(image_incorrect)  # Convert the image to a PIL image
+    img_tensor_incorrect = transform(image_incorrect).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
+
     dataset_incorrect = torch.utils.data.TensorDataset(img_tensor_incorrect, torch.tensor([0]))  # Assign label 0 to incorrect image
 
     # Combine the datasets for training

@@ -74,7 +74,8 @@ async def process_image(request):
         jobs = mp.Queue()
 
         # Crea i processi di elaborazione
-        num_processes = mp.cpu_count() - 1
+        num_processes = mp.cpu_count() -8
+        print("core: ", mp.cpu_count())
         processes = [mp.Process(target=process_job, args=(jobs, i, model, device)) for i in range(num_processes)]
 
         # Avvia i processi
@@ -146,11 +147,6 @@ def process_job(jobs, process_id, model, device):
                 print(f"Error processing job: {e}")
 
     asyncio.run(async_process_job(jobs, process_id, model, device))
-
-
-
-
-
 
 
 
@@ -335,34 +331,40 @@ def retrain_method(model, photo_now, indexPhoto):
 
     folder_number = ((indexPhoto) % 8) + 1
     print("Folder numeber: ", folder_number)
-    photo_folder = f"C:\\Users\\MadSox\\Desktop\\FotoPersone\\{folder_number}/"  # Nome della cartella corrispondente
+    photo_folder = f"C:\\PycharmProjects\\FotoPersone\\{folder_number}/"  # Nome della cartella corrispondente
     photo_files = os.listdir(photo_folder)  # Elenco dei file nella cartella
     photo_files.sort()  # Ordinamento dei file nella cartella
-    for photo_file in photo_files:
-        photo_path = os.path.join(photo_folder, photo_file)
-        photo_incorrect = Image.open(photo_path)
 
-        print("***  Start with another incorrect photo  ***")
-        model = retrain_model(model, photo_now, photo_incorrect)
+    try:
+        for photo_file in photo_files:
 
-        print("Data augmentation")
-        transformed_images_corrects = data_augmentation(photo_now)
-        transformed_images_incorrects = data_augmentation(photo_incorrect)
-        for transformed_images_correct in transformed_images_corrects:
-            for transformed_images_incorrect in transformed_images_incorrects:
-                model = retrain_model(model, transformed_images_correct, transformed_images_incorrect)
+            photo_path = os.path.join(photo_folder, photo_file)
+            photo_incorrect = Image.open(photo_path)
+
+            print("***  Start with another incorrect photo  ***")
+            model = retrain_model(model, photo_now, photo_incorrect)
+
+            print("Data augmentation")
+            transformed_images_corrects = data_augmentation(photo_now)
+            transformed_images_incorrects = data_augmentation(photo_incorrect)
+            for transformed_images_correct in transformed_images_corrects:
+                for transformed_images_incorrect in transformed_images_incorrects:
+                    model = retrain_model(model, transformed_images_correct, transformed_images_incorrect)
 
 
-        print("photo brighter")
-        for i in range(1, 3):
-            bright_image = change_brightness(photo_now, i)
-            model = retrain_model(model, bright_image, photo_incorrect)
-        print("photo less bright")
-        for i in range(2, 0, -1):
-            bright_image = change_brightness(photo_now, i)
-            model = retrain_model(model, bright_image, photo_incorrect)
+            print("photo brighter")
+            for i in range(1, 3):
+                bright_image = change_brightness(photo_now, i)
+                model = retrain_model(model, bright_image, photo_incorrect)
+            print("photo less bright")
+            for i in range(2, 0, -1):
+                bright_image = change_brightness(photo_now, i)
+                model = retrain_model(model, bright_image, photo_incorrect)
 
-        print("111")
+
+    except:
+        print("Error: Photo file not found:", photo_path)
+        pass
     return model
 
 
@@ -403,7 +405,7 @@ def retrain_model(model, photo_now, photo_incorrect):
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
     train_loader = torch.utils.data.DataLoader(combined_dataset, batch_size=1, shuffle=True)
-    for epoch in range(5):
+    for epoch in range(1):
         running_loss = 0.0
         for i, data in enumerate(train_loader, 0):
             inputs, labels = data

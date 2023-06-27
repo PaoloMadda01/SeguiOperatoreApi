@@ -17,9 +17,14 @@ import multiprocessing as mp
 from ultralytics import YOLO
 import asyncio
 import os
+import cProfile
+import pstats
+from concurrent.futures import ThreadPoolExecutor
+
 
 # python3 manage.py runserver 192.168.181.129:8000
 
+executor = ThreadPoolExecutor()
 
 #Per testare lo stato in modo semplice la connessione all'api.
 #Se restituisce 'Ok' allora c'è connessione e il server  online
@@ -74,7 +79,7 @@ async def process_image(request):
         jobs = mp.Queue()
 
         # Crea i processi di elaborazione
-        num_processes = mp.cpu_count() -8
+        num_processes = mp.cpu_count() -4
         print("core: ", mp.cpu_count())
         processes = [mp.Process(target=process_job, args=(jobs, i, model, device)) for i in range(num_processes)]
 
@@ -85,17 +90,37 @@ async def process_image(request):
         while not stop_event.is_set():
 
             try:
-                frame = await capture_image_async()
-                bbox = detect_person(frame, model)
-                if bbox is not None:
-                    x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
-                    print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
+                # Crea un oggetto profiler
+                #profiler = cProfile.Profile()
+                # Avvia il profiler
+                #profiler.enable()
 
+                result = await capture_image_async()
+                if result is not None:
+                    color_frame, depth_frame = result
+                    bbox = detect_person(color_frame, model)
+                    if bbox is not None:
+                        x_coordinate, y_coordinate, distance = calculate_coordinates(depth_frame, bbox)
+                        print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) ____________")
+
+                        #print("cProfile:  ")
+                        # Crea un oggetto Stats dal profiler
+                        #stats = pstats.Stats(profiler)
+                        # Stampa le statistiche nel terminale
+                        #stats.print_stats()
+                        # Salva le statistiche nel file di testo
+                        #with open(r'C:\Users\MadSox\Desktop\CProfile.txt', 'w', encoding='utf-8') as f:
+                        #    stats.stream = f
+                        #    stats.print_stats()
+
+
+                    # Aggiungi il lavoro alla coda
+                    jobs.put((color_frame, depth_frame))  # Passa le informazioni necessarie come una tupla
+                else:
+                    print("Failed to capture image.")
             except RuntimeError as e:
                 print(f"Error processing job: {e}")
 
-            # Aggiungi il lavoro alla coda
-            jobs.put((frame))  # Passa le informazioni necessarie come una tupla
 
             # Se viene premuto il tasto 'q', interrompi il ciclo while
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -111,6 +136,9 @@ async def process_image(request):
 
         # Chiudi tutte le finestre di OpenCV
         cv2.destroyAllWindows()
+
+        # Ferma il profiler
+        #profiler.disable()
 
         # Ritorna una HttpResponse con un messaggio di successo
         return HttpResponse('Image processing completed successfully')
@@ -135,14 +163,18 @@ def process_job(jobs, process_id, model, device):
                 break
 
             bbox = None
+
             try:
                 print(f"Core: {process_id}")
-                frame = await capture_image_async()
-                bbox = detect_person(frame, model)
-                if bbox is not None:
-                    x_coordinate, y_coordinate, distance = calculate_coordinates(frame, bbox)
-                    print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance}____________")
-
+                result = await capture_image_async()
+                if result is not None:
+                    color_frame, depth_frame = result
+                    bbox = detect_person(color_frame, model)
+                    if bbox is not None:
+                        x_coordinate, y_coordinate, distance = calculate_coordinates(depth_frame, bbox)
+                        print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) ____________")
+                else:
+                    print("Failed to capture image.")
             except RuntimeError as e:
                 print(f"Error processing job: {e}")
 
@@ -177,6 +209,7 @@ def predict_image(bbox, frame, model):
     # Ottieni il valore di probabilità della classe positiva (indice 1)
     positive_prob = predicted[0][1].item()
 
+    print('Threshold: ', positive_prob)
     # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
     threshold = 0.0000009
     if positive_prob > threshold:
@@ -188,9 +221,7 @@ def predict_image(bbox, frame, model):
 
 
 
-def calculate_coordinates(image, bbox):
-    # Acquisisce il frame della profondità dall'immagine
-    depth_frame = get_depth_frame(image)
+def calculate_coordinates(depth_image, bbox):
 
     # Ottiene le coordinate del centro del bounding box
     x_min, y_min, x_max, y_max = bbox
@@ -198,26 +229,14 @@ def calculate_coordinates(image, bbox):
     y_center = int((y_min + y_max) / 2)
 
     # Ottiene la distanza dal pixel di interesse nel frame della profondità
-    index_1 = depth_frame[0][1]
-    index_2 = depth_frame[0][2]
+    z_center = depth_image[y_center, x_center]
+
     # coordinate di profondità
-    z1 = 0  # distanza dal sensore di profondità corrispondente al pixel (0, 0)
-    z2 = np.where(depth_frame[0] == index_1)[0][0]  # distanza dal sensore di profondità corrispondente al pixel (0, 1)
-    z3 = np.where(depth_frame[0] == index_2)[0][0]  # distanza dal sensore di profondità corrispondente al pixel (0, 2)
-
-    # distanza interpolata
-    distance = math.sqrt((z2 - z1)**2 + (x_center**2 + y_center**2) + (z3 - z1)**2)
-
-    # Calcola le coordinate della persona utilizzando il sensore ad infrarossi
-    # per ottenere la distanza tra la telecamera e il pixel di interesse
-    #x, y, z = rs.rs2_deproject_pixel_to_point(
-    #    depth_frame.profile.as_video_stream_profile().intrinsics,  # parametri della fotocamera
-    #    [x_center, y_center],  # coordinate del centro del bounding box
-    #    distance)  # distanza dal pixel di interesse
+    distance = math.sqrt(x_center ** 2 + y_center ** 2 + z_center ** 2)
 
     # Converte le coordinate in metri
-    x = x_center / 1000.0
-    y = y_center / 1000.0
+    x = x_center
+    y = y_center
     distance = distance / 1000.0
 
     # Ritorna la distanza e le coordinate della persona
@@ -331,7 +350,7 @@ def retrain_method(model, photo_now, indexPhoto):
 
     folder_number = ((indexPhoto) % 8) + 1
     print("Folder numeber: ", folder_number)
-    photo_folder = f"C:\\PycharmProjects\\FotoPersone\\{folder_number}/"  # Nome della cartella corrispondente
+    photo_folder = f"C:\\Users\\MadSox\\Desktop\\FotoPersone\\{folder_number}/"  # Nome della cartella corrispondente
     photo_files = os.listdir(photo_folder)  # Elenco dei file nella cartella
     photo_files.sort()  # Ordinamento dei file nella cartella
 
@@ -461,21 +480,21 @@ def crop_person(image):
 #       **********            UTILITIES           **********
 
 async def capture_image_async():
-
     while True:
         try:
-            frame = capture_image(request=None)
-            return frame
+            async for result in capture_image():
+                return result
         except RuntimeError as e:
             if "Device or resource busy" in str(e):
                 # Attendi per un breve periodo di tempo e riprova
-                await asyncio.sleep(0.01)
+                print("Delay")
+                await asyncio.sleep(0.04)
             else:
                 # Gestisci altri errori in modo appropriato
                 raise
 
 
-def capture_image(request):
+async def capture_image():
     # Verifica la presenza di una fotocamera Intel RealSense collegata tramite USB
     ctx = rs.context()
     devices = ctx.query_devices()
@@ -484,23 +503,88 @@ def capture_image(request):
         pipeline = rs.pipeline()
         config = rs.config()
         config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        #config.enable_stream(rs.stream.infrared, 1, 640, 480, rs.format.y8, 30)
+        #config.enable_stream(rs.stream.infrared, 2, 640, 480, rs.format.y8, 30)
+
+        # Aggiunta di un filtro di decimazione per ridurre la risoluzione
+        decimation = rs.decimation_filter()
+        decimation.set_option(rs.option.filter_magnitude, 2)
+
+        # Aggiunta di un filtro di riduzione del rumore
+        spatial = rs.spatial_filter()
+        spatial.set_option(rs.option.filter_magnitude, 2)
+        spatial.set_option(rs.option.filter_smooth_alpha, 0.5)
+        spatial.set_option(rs.option.filter_smooth_delta, 20)
+
+        # Aggiunta di un filtro di smoothing temporale
+        temporal = rs.temporal_filter()
+        temporal.set_option(rs.option.filter_smooth_alpha, 0.4)
+        temporal.set_option(rs.option.filter_smooth_delta, 20)
+
+        # Aggiunta dell'autocalibrazione
+        #config.enable_stream(rs.stream.gyro)
+        #config.enable_stream(rs.stream.accel)
+        #config.enable_stream(rs.stream.pose)
+
         pipeline.start(config)
-        frames = pipeline.wait_for_frames()
-        color_frame = frames.get_color_frame()
-        photo_now = np.asarray(color_frame.get_data())
-        pipeline.stop()
+
+        # Applicazione dei filtri
+        depth_to_disparity = rs.disparity_transform(True)
+        disparity_to_depth = rs.disparity_transform(False)
+
+        # Crea un buffer per i frame
+        color_frames = []
+        depth_frames = []
+
+        try:
+            while True:
+                loop = asyncio.get_event_loop()
+                frames = await loop.run_in_executor(executor, lambda: asyncio.to_thread(pipeline.wait_for_frames, timeout_ms=1500))
+                frames = await frames  # Await the coroutine to get the frames object
+                color_frame = frames.get_color_frame()
+                color_frame = np.asarray(color_frame.get_data())
+
+                depth_frame = frames.get_depth_frame()
+                depth_frame = decimation.process(depth_frame)
+                depth_frame = depth_to_disparity.process(depth_frame)
+                depth_frame = spatial.process(depth_frame)
+                depth_frame = temporal.process(depth_frame)
+                depth_frame = disparity_to_depth.process(depth_frame)
+                depth_frame = get_resized_depth_frame(color_frame, depth_frame)
+
+
+                color_frames.append(color_frame)
+                depth_frames.append(depth_frame)
+
+                if len(color_frames) > 0 and len(depth_frames) > 0:
+                    await asyncio.sleep(0.1)
+                    yield color_frames.pop(0), depth_frames.pop(0)
+
+
+
+        finally:
+            pipeline.stop()
         #print("Intel - USB")
     else:
-        # Verifica se le immagini sono presenti nella richiesta
-        if 'photo' in request.FILES:
-            # Leggi l'immagine dalla richiesta
-            photo = request.FILES['photo'].read()
-            nparr = np.frombuffer(photo, np.uint8)
-            photo_now = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            print("Webcam")
-        else:
-            return HttpResponse("Failed to acquire image.")
-    return photo_now
+        print("No camera detected!")
+
+
+def get_resized_depth_frame(color_image, depth_frame):
+    """
+    Resize the depth frame to match the size of the color image
+    """
+    depth_image = np.asanyarray(depth_frame.get_data())
+
+    # Resize the depth image to match the size of the color image
+    resized_depth_image = cv2.resize(depth_image, (color_image.shape[1], color_image.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+    return resized_depth_image
+
+
+
+
+
 
 def start_video():
     # Verifica la presenza di una fotocamera Intel RealSense collegata tramite USB
@@ -517,46 +601,6 @@ def start_video():
     else:
         print("Error with Intel")
         return HttpResponse("Failed to acquire video stream.")
-
-
-def get_depth_frame(frame):
-    """
-    Get the depth frame from the input frame using the RealSense depth sensor.
-
-    Args:
-        frame: the input frame.
-
-    Returns:
-        The depth frame.
-    """
-    # Create a pipeline object for the RealSense depth sensor
-    pipeline = rs.pipeline()
-
-    # Create a configuration object for the pipeline
-    config = rs.config()
-
-    # Enable the depth stream
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-
-    # Start the pipeline
-    profile = pipeline.start(config)
-
-    try:
-        # Wait for a coherent pair of frames: depth and color
-        frames = pipeline.wait_for_frames()
-        depth_frame = frames.get_depth_frame()
-
-        # Convert the depth frame to a numpy array
-        depth_image = np.asanyarray(depth_frame.get_data())
-
-        # Resize the depth image to match the size of the color image
-        resized_depth_image = cv2.resize(depth_image, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
-
-        return resized_depth_image
-
-    finally:
-        # Stop the pipeline
-        pipeline.stop()
 
 
 

@@ -2,6 +2,7 @@ import io
 from django.http import JsonResponse, HttpResponseBadRequest
 import requests
 from mpmath.identification import transforms
+from torch import classes
 from torchvision import models
 import torchvision.transforms as transforms
 import pyrealsense2 as rs
@@ -20,7 +21,9 @@ import os
 import cProfile
 import pstats
 from concurrent.futures import ThreadPoolExecutor
-
+import serial
+import serial.tools.list_ports
+import time
 
 # python3 manage.py runserver 192.168.181.129:8000
 
@@ -73,7 +76,7 @@ async def process_image(request):
         model.to(device)
 
         # Load the YOLOv8 model
-        model = YOLO('yolov8n.pt')
+        modelYolo = YOLO('yolov8n.pt')
 
         # Crea la coda dei lavori da elaborare in parallelo
         jobs = mp.Queue()
@@ -81,7 +84,7 @@ async def process_image(request):
         # Crea i processi di elaborazione
         num_processes = mp.cpu_count() -4
         print("core: ", mp.cpu_count())
-        processes = [mp.Process(target=process_job, args=(jobs, i, model, device)) for i in range(num_processes)]
+        processes = [mp.Process(target=process_job, args=(jobs, i, modelYolo, model, device)) for i in range(num_processes)]
 
         # Avvia i processi
         for process in processes:
@@ -98,10 +101,16 @@ async def process_image(request):
                 result = await capture_image_async()
                 if result is not None:
                     color_frame, depth_frame = result
-                    bbox = detect_person(color_frame, model)
-                    if bbox is not None:
-                        x_coordinate, y_coordinate, distance = calculate_coordinates(depth_frame, bbox)
-                        print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) ____________")
+                    bboxes = detect_person(color_frame, modelYolo)
+                    if bboxes is not None:
+                        bPredict, bbox_person_predicted, positive_prob = predict_image(bboxes, color_frame, model)
+                        if bPredict is True:
+                            x_coordinate, y_coordinate, distance = calculate_coordinates(depth_frame, bbox_person_predicted)
+                            print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) ____________")
+
+                            if find_arduino_port() is not None:
+                                positive_prob = 0.5
+                                Print_Serial(x_coordinate, y_coordinate, distance, positive_prob)
 
                         #print("cProfile:  ")
                         # Crea un oggetto Stats dal profiler
@@ -148,12 +157,12 @@ async def process_image(request):
         return HttpResponseBadRequest('Invalid request method')
 
 
-def process_job(jobs, process_id, model, device):
+def process_job(jobs, process_id, modelYolo, model, device):
     """
     Funzione eseguita da ogni processo per elaborare i lavori in parallelo.
     """
 
-    async def async_process_job(jobs, process_id, model, device):
+    async def async_process_job(jobs, process_id, modelYolo, model, device):
         while True:
             # Preleva un lavoro dalla coda
             job = jobs.get()
@@ -162,27 +171,56 @@ def process_job(jobs, process_id, model, device):
             if job is None:
                 break
 
-            bbox = None
+            bboxes = None
 
             try:
                 print(f"Core: {process_id}")
                 result = await capture_image_async()
                 if result is not None:
                     color_frame, depth_frame = result
-                    bbox = detect_person(color_frame, model)
-                    if bbox is not None:
-                        x_coordinate, y_coordinate, distance = calculate_coordinates(depth_frame, bbox)
-                        print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) ____________")
+                    bboxes = detect_person(color_frame, modelYolo)
+                    if bboxes is not None:
+                        bPredict, bbox_person_predicted, positive_prob = predict_image(bboxes, color_frame, model)
+                        if bPredict is True:
+                            x_coordinate, y_coordinate, distance = calculate_coordinates(depth_frame,bbox_person_predicted)
+                            print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) ____________")
+
+                            if find_arduino_port() is not None:
+                                positive_prob = 0.5
+                                Print_Serial(x_coordinate, y_coordinate, distance, positive_prob)
                 else:
                     print("Failed to capture image.")
             except RuntimeError as e:
                 print(f"Error processing job: {e}")
 
-    asyncio.run(async_process_job(jobs, process_id, model, device))
+    asyncio.run(async_process_job(jobs, process_id, modelYolo, model, device))
+
+
+# Cerca la persona e crea la bbox di essa
+def detect_person(frame, model):
+    bbox = None
+    person_bboxes = []
+
+    # Use the YOLOv8 model to detect objects in the image
+    results = model(frame)
+    if len(results) > 0:
+        for result in results:
+            boxes = result.boxes.cpu().numpy()
+            for box in boxes:
+                if box.conf[0] > 0.5 and box.cls[0] == 0:
+                    r = box.xyxy[0].astype(int)
+                    bbox = (r[0], r[1], r[2], r[3])
+                    person_bboxes.append(bbox)
+                    print("Predicted!")
+
+    if bbox is None:
+        print("No person detected")
+
+    return person_bboxes
 
 
 
-def predict_image(bbox, frame, model):
+def predict_image(bboxes, frame, model):
     # Define the transformations to be applied to the image
     transform = transforms.Compose([
         transforms.Resize((640, 480)),  # Ridimensiona l'immagine a una risoluzione di 640x480
@@ -190,34 +228,43 @@ def predict_image(bbox, frame, model):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # Normalizza l'immagine
     ])
 
-    # Ritaglia l'immagine del tronco/schiena utilizzando il bbox rilevato
-    x, y, w, h = bbox
+    # Inizializza le variabili per il bbox e la probabilità più alta
+    max_bbox = None
+    max_positive_prob = 0.0
 
-    image = frame[y:y + h, x:x + w]
+    for bbox in bboxes:
+        # Ritaglia l'immagine del tronco/schiena utilizzando il bbox rilevato
+        x, y, w, h = bbox
+        image = frame[y:y + h, x:x + w]
 
-    # Converti l'immagine in un tensore PyTorch e applica le trasformazioni
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
-    image = Image.fromarray(image)  # Convert the image to a PIL image
-    image = transform(image).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
+        # Converti l'immagine in un tensore PyTorch e applica le trasformazioni
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # Convert the image from BGR to RGB
+        image = Image.fromarray(image)  # Convert the image to a PIL image
+        image = transform(image).unsqueeze(0)  # Convert the image to a PyTorch tensor and apply transformations
 
-    # Utilizza il modello per effettuare una predizione
-    with torch.no_grad():
-        model.eval()
-        outputs = model(image)
-        predicted = F.softmax(outputs, dim=1)
+        # Utilizza il modello per effettuare una predizione
+        with torch.no_grad():
+            model.eval()
+            outputs = model(image)
+            predicted = F.softmax(outputs, dim=1)
 
-    # Ottieni il valore di probabilità della classe positiva (indice 1)
-    positive_prob = predicted[0][1].item()
+        # Ottieni il valore di probabilità della classe positiva (indice 1)
+        positive_prob = predicted[0][1].item()
 
-    print('Threshold: ', positive_prob)
+        # Aggiorna il bbox e la probabilità più alta se la probabilità attuale è maggiore
+        if positive_prob > max_positive_prob:
+            max_bbox = bbox
+            max_positive_prob = positive_prob
+
     # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
-    threshold = 0.0000009
-    if positive_prob > threshold:
-        print("Predicted!")
-        x_coordinate, y_coordinate, distance = calculate_coordinates(image, bbox)
-        print(f"Coordinates: ({x_coordinate}, {y_coordinate}, {distance}")
-
-    return(x_coordinate, y_coordinate, distance)
+    threshold = 0.009
+    if max_positive_prob > threshold:
+        print("Predicted! positive prob: ", max_positive_prob)
+        bPredict = True
+        return (bPredict, max_bbox, max_positive_prob)
+    else:
+        bPredict = False
+        return (bPredict, None, None)
 
 
 
@@ -245,28 +292,6 @@ def calculate_coordinates(depth_image, bbox):
 
 
 
-# Cerca la persona e crea la bbox di essa
-def detect_person(frame, model):
-    bbox = None
-
-    # Use the YOLOv8 model to detect objects in the image
-    results = model(frame)
-    if len(results) > 0:
-        for result in results:
-            boxes = result.boxes.cpu().numpy()
-            for box in boxes:
-                if box.conf[0] > 0.5:
-                    r = box.xyxy[0].astype(int)
-                    bbox = (r[0], r[1], r[2], r[3])
-                    print("Predicted!")
-                    break
-
-    if bbox is None:
-        print("No person detected")
-
-    return bbox
-
-
 
 
 
@@ -276,62 +301,65 @@ def detect_person(frame, model):
 #       **********            UPDATE MODEL           **********
 
 def update_model(request):
-        photo_now = capture_image(request)
-
-        # Verifica se l'immagine è stata acquisita correttamente
-        if photo_now is not None:
-
+    photos_now = capture_4photos(request)
+    cropped_images = []
+    # Verifica se l'immagine è stata acquisita correttamente
+    if photos_now is not None:
+        print("Photos captured")
+        for photo_now in photos_now:
             # Elabora l'immagine per rilevare la parte posteriore o inferiore del corpo
-            cropped_image = crop_person(photo_now)
+            cropped_images.append(crop_person(photo_now))
 
 
-            # Verifica e assegna l'idice della foto per l'addestramento
-            if 'indexPhoto' not in request.FILES:
-                indexPhoto = 1
-            else:
-                # Leggi i dati binari del file del modello
-                indexPhoto = int(request.FILES['indexPhoto'].read())  # Leggi l'indice come intero
-
-            ## *** Model ***
-            # Verifica se il file del modello è presente nella richiesta
-            if 'model' not in request.FILES:
-                model = None
-                indexPhoto = 0
-            else:
-                # Leggi i dati binari del file del modello
-                model = request.FILES['model'].read()
-
-            # Verifica che il file del modello esista
-            #model_path = os.path.join(settings.BASE_DIR, 'model.pth')
-            if not model:
-                # Se il file non esiste, crea un nuovo modello vuoto
-                print("Create new model")
-                model = create_new_model()
-                model = retrain_method(model, cropped_image, indexPhoto)
-            else:
-                try:
-                    # Prova a caricare il file del modello esistente
-                    model = torch.load(io.BytesIO(model))
-                    model = retrain_method(model, cropped_image, indexPhoto)
-                except (IOError, RuntimeError):
-                    # Se ci sono problemi con il file del modello esistente, crea un nuovo modello vuoto
-                    model = create_new_model()
-                    model = retrain_method(model, cropped_image, indexPhoto)
-
-            # Serializza il modello come bytes usando io.BytesIO e torch.save
-            buffer = io.BytesIO()
-            torch.save(model, buffer)
-            buffer.seek(0)
-            model_bytes = buffer.read()
-
-            # Costruisci la risposta HTTP con l'allegato del file model.pth
-            response = HttpResponse(content_type='application/octet-stream')
-            response['Content-Disposition'] = 'attachment; filename="model.pth"'
-            response.write(model_bytes)
-
-            return response
+        # Verifica e assegna l'idice della foto per l'addestramento
+        if 'indexPhoto' not in request.FILES:
+            indexPhoto = 1
         else:
-            return HttpResponse("Failed to acquire image.")
+            # Leggi i dati binari del file del modello
+            indexPhoto = int(request.FILES['indexPhoto'].read())  # Leggi l'indice come intero
+
+        ## *** Model ***
+        # Verifica se il file del modello è presente nella richiesta
+        if 'model' not in request.FILES:
+            model = None
+            indexPhoto = 0
+        else:
+            # Leggi i dati binari del file del modello
+            model = request.FILES['model'].read()
+
+        # Verifica che il file del modello esista
+        #model_path = os.path.join(settings.BASE_DIR, 'model.pth')
+        if not model:
+            # Se il file non esiste, crea un nuovo modello vuoto
+            print("Create new model")
+            model = create_new_model()
+            model = retrain_method(model, cropped_images, indexPhoto)
+        else:
+            try:
+                # Prova a caricare il file del modello esistente
+                model = torch.load(io.BytesIO(model))
+                model = retrain_method(model, cropped_images, indexPhoto)
+            except (IOError, RuntimeError):
+                # Se ci sono problemi con il file del modello esistente, crea un nuovo modello vuoto
+                model = create_new_model()
+                model = retrain_method(model, cropped_images, indexPhoto)
+
+        # Serializza il modello come bytes usando io.BytesIO e torch.save
+        buffer = io.BytesIO()
+        torch.save(model, buffer)
+        buffer.seek(0)
+        model_bytes = buffer.read()
+
+        # Costruisci la risposta HTTP con l'allegato del file model.pth
+        response = HttpResponse(content_type='application/octet-stream')
+        response['Content-Disposition'] = 'attachment; filename="model.pth"'
+        response.write(model_bytes)
+
+        print("Model sent!")
+
+        return response
+    else:
+        return HttpResponse("Failed to acquire image.")
 
 
 
@@ -346,43 +374,47 @@ def create_new_model():
 
     return model
 
-def retrain_method(model, photo_now, indexPhoto):
+def retrain_method(model, photos_now, indexPhoto):
 
-    folder_number = ((indexPhoto) % 8) + 1
+    folder_number = (indexPhoto % 8) + 1
     print("Folder numeber: ", folder_number)
     photo_folder = f"C:\\Users\\MadSox\\Desktop\\FotoPersone\\{folder_number}/"  # Nome della cartella corrispondente
     photo_files = os.listdir(photo_folder)  # Elenco dei file nella cartella
     photo_files.sort()  # Ordinamento dei file nella cartella
+    incorrect_photo_number = 0
 
     try:
         for photo_file in photo_files:
+            for index in range(len(photos_now)):
+                photo_path = os.path.join(photo_folder, photo_file)
+                photo_incorrect = Image.open(photo_path)
 
-            photo_path = os.path.join(photo_folder, photo_file)
-            photo_incorrect = Image.open(photo_path)
+                incorrect_photo_number += 1
 
-            print("***  Start with another incorrect photo  ***")
-            model = retrain_model(model, photo_now, photo_incorrect)
+                print("***  Start with another incorrect photo. N: ", incorrect_photo_number, "  ***")
+                model = retrain_model(model, photos_now[index], photo_incorrect)
 
-            print("Data augmentation")
-            transformed_images_corrects = data_augmentation(photo_now)
-            transformed_images_incorrects = data_augmentation(photo_incorrect)
-            for transformed_images_correct in transformed_images_corrects:
-                for transformed_images_incorrect in transformed_images_incorrects:
-                    model = retrain_model(model, transformed_images_correct, transformed_images_incorrect)
+                print("Data augmentation")
+                transformed_images_corrects = data_augmentation(photos_now[index])
+                transformed_images_incorrects = data_augmentation(photo_incorrect)
+                for transformed_images_correct in transformed_images_corrects:
+                    for transformed_images_incorrect in transformed_images_incorrects:
+                        model = retrain_model(model, transformed_images_correct, transformed_images_incorrect)
 
 
-            print("photo brighter")
-            for i in range(1, 3):
-                bright_image = change_brightness(photo_now, i)
-                model = retrain_model(model, bright_image, photo_incorrect)
-            print("photo less bright")
-            for i in range(2, 0, -1):
-                bright_image = change_brightness(photo_now, i)
-                model = retrain_model(model, bright_image, photo_incorrect)
+                print("photo brighter")
+                for i in range(1, 3):
+                    bright_image = change_brightness(photos_now[index], i)
+                    model = retrain_model(model, bright_image, photo_incorrect)
+                print("photo less bright")
+                for i in range(2, 0, -1):
+                    bright_image = change_brightness(photos_now[index], i)
+                    model = retrain_model(model, bright_image, photo_incorrect)
 
+        print("*** Finished with training  ****")
 
     except:
-        print("Error: Photo file not found:", photo_path)
+        print("Error: Photo file not found")
         pass
     return model
 
@@ -452,7 +484,7 @@ def crop_person(image):
     for result in results:
         boxes = result.boxes.cpu().numpy()
         for box in boxes:
-            if box.conf[0] > 0.5:
+            if box.conf[0] > 0.5 and box.cls[0] == 0:
                 r = box.xyxy[0].astype(int)
                 cropped_image = image[r[1]:r[3], r[0]:r[2]]
                 person_count += 1
@@ -468,7 +500,6 @@ def crop_person(image):
         cropped_image = cv2.resize(cropped_image, (224, 225))
 
         print("Image is good")
-        print("Try with YOLOv8 - full body")
         return cropped_image
 
     else:
@@ -570,6 +601,63 @@ async def capture_image():
         print("No camera detected!")
 
 
+
+
+
+
+
+def capture_4photos(request):
+    # Verifica la presenza di una fotocamera Intel RealSense collegata tramite USB
+    ctx = rs.context()
+    devices = ctx.query_devices()
+    if devices.size() > 0:
+        # Ottieni l'immagine dalla fotocamera
+        pipeline = rs.pipeline()
+        config = rs.config()
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+        # Aggiunta di un filtro di riduzione del rumore
+        spatial = rs.spatial_filter()
+        spatial.set_option(rs.option.filter_magnitude, 2)
+        spatial.set_option(rs.option.filter_smooth_alpha, 0.5)
+        spatial.set_option(rs.option.filter_smooth_delta, 20)
+
+        # Aggiunta di un filtro di smoothing temporale
+        temporal = rs.temporal_filter()
+        temporal.set_option(rs.option.filter_smooth_alpha, 0.4)
+        temporal.set_option(rs.option.filter_smooth_delta, 20)
+
+        pipeline.start(config)
+
+        # Crea un buffer per i frame
+        color_frames = []
+
+        try:
+            for i in range(4):
+                frames = pipeline.wait_for_frames(timeout_ms=1500)
+                color_frame = frames.get_color_frame()
+                color_frame = np.asarray(color_frame.get_data())
+
+                color_frames.append(color_frame)
+
+            return color_frames
+
+        finally:
+            pipeline.stop()
+    else:
+        print("No camera detected!")
+
+
+
+
+
+
+
+
+
+
+
+
 def get_resized_depth_frame(color_image, depth_frame):
     """
     Resize the depth frame to match the size of the color image
@@ -669,4 +757,43 @@ def change_brightness(image, brightness_factor):
     image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     return image
 
+
+
+
+
+
+
+
+
+def find_arduino_port():
+    ports = serial.tools.list_ports.comports()
+    for port in ports:
+        if "Arduino" in port.description:
+            return port.device
+    return None
+
+
+
+def Print_Serial(x_coordinate, y_coordinate, distance, positive_prob):
+
+    ser = serial.Serial('COM3',9600)
+
+    x_coordinate = 300
+    positive_prob = 50
+    distance = round(distance, 2)
+
+    print(f"{x_coordinate},{y_coordinate},{distance},{positive_prob}\n")
+
+    # Formatta i dati come una stringa separata da virgole
+    data = f"{x_coordinate},{y_coordinate},{distance},{positive_prob}\n"
+
+    # Invia i dati ad Arduino
+    ser.write(data.encode())
+
+    # Attendi un breve ritardo prima di inviare il prossimo set di dati
+    #time.sleep(1)
+
+    ser.close()
+
+    return None
 

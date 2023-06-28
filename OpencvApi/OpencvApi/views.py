@@ -26,7 +26,7 @@ import time
 # python3 manage.py runserver 192.168.181.129:8000
 
 executor = ThreadPoolExecutor()
-ser = serial.Serial('COM3', 9600)
+ser = None
 
 
 
@@ -61,6 +61,8 @@ def stop_processing(request):
 
 #       **********            Process Image           **********
 async def process_image(request):
+    global ser
+    ser = serial.Serial('COM3', 9600)
     if request.method == 'POST':
         print('POST requested')
 
@@ -105,7 +107,6 @@ async def process_image(request):
                             print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) Probability: ", positive_prob, " ____________")
 
                             if find_arduino_port() is not None:
-                                positive_prob = 0.5
                                 Print_Serial(x_coordinate, y_coordinate, distance, positive_prob)
 
 
@@ -172,7 +173,6 @@ def process_job(jobs, process_id, modelYolo, model, device):
                             print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance})  Probability: ", positive_prob, " ____________")
 
                             if find_arduino_port() is not None:
-                                positive_prob = 0.5
                                 Print_Serial(x_coordinate, y_coordinate, distance, positive_prob)
                 else:
                     print("Failed to capture image.")
@@ -760,17 +760,11 @@ def find_arduino_port():
 
 
 def Print_Serial(x_coordinate, y_coordinate, distance, positive_prob):
-
+    global ser
 
     distance = round(distance, 2)
     positive_prob = positive_prob * 100
     positive_prob = round(positive_prob, 2)
-
-    print(f"{x_coordinate},{y_coordinate},{distance},{positive_prob}\n")
-
-    x_coordinate = 0.640
-    distance = 0.054
-    positive_prob = 5.403
 
     # Formatta i dati come una stringa separata da virgole
     data = f"{x_coordinate},{distance},{positive_prob}\n"
@@ -778,8 +772,4 @@ def Print_Serial(x_coordinate, y_coordinate, distance, positive_prob):
     # Invia i dati ad Arduino
     ser.write(data.encode())
 
-    # Attendi un breve ritardo prima di inviare il prossimo set di dati
-    time.sleep(0.01)
-
-    return None
 

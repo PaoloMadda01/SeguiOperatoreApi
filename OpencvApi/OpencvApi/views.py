@@ -18,8 +18,6 @@ import multiprocessing as mp
 from ultralytics import YOLO
 import asyncio
 import os
-import cProfile
-import pstats
 from concurrent.futures import ThreadPoolExecutor
 import serial
 import serial.tools.list_ports
@@ -28,6 +26,9 @@ import time
 # python3 manage.py runserver 192.168.181.129:8000
 
 executor = ThreadPoolExecutor()
+ser = serial.Serial('COM3', 9600)
+
+
 
 #Per testare lo stato in modo semplice la connessione all'api.
 #Se restituisce 'Ok' allora c'è connessione e il server  online
@@ -93,11 +94,6 @@ async def process_image(request):
         while not stop_event.is_set():
 
             try:
-                # Crea un oggetto profiler
-                #profiler = cProfile.Profile()
-                # Avvia il profiler
-                #profiler.enable()
-
                 result = await capture_image_async()
                 if result is not None:
                     color_frame, depth_frame = result
@@ -106,21 +102,11 @@ async def process_image(request):
                         bPredict, bbox_person_predicted, positive_prob = predict_image(bboxes, color_frame, model)
                         if bPredict is True:
                             x_coordinate, y_coordinate, distance = calculate_coordinates(depth_frame, bbox_person_predicted)
-                            print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) ____________")
+                            print(f"____________Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) Probability: ", positive_prob, " ____________")
 
                             if find_arduino_port() is not None:
                                 positive_prob = 0.5
                                 Print_Serial(x_coordinate, y_coordinate, distance, positive_prob)
-
-                        #print("cProfile:  ")
-                        # Crea un oggetto Stats dal profiler
-                        #stats = pstats.Stats(profiler)
-                        # Stampa le statistiche nel terminale
-                        #stats.print_stats()
-                        # Salva le statistiche nel file di testo
-                        #with open(r'C:\Users\MadSox\Desktop\CProfile.txt', 'w', encoding='utf-8') as f:
-                        #    stats.stream = f
-                        #    stats.print_stats()
 
 
                     # Aggiungi il lavoro alla coda
@@ -183,7 +169,7 @@ def process_job(jobs, process_id, modelYolo, model, device):
                         bPredict, bbox_person_predicted, positive_prob = predict_image(bboxes, color_frame, model)
                         if bPredict is True:
                             x_coordinate, y_coordinate, distance = calculate_coordinates(depth_frame,bbox_person_predicted)
-                            print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance}) ____________")
+                            print(f"____________MP Coordinates: ({x_coordinate}, {y_coordinate}, {distance})  Probability: ", positive_prob, " ____________")
 
                             if find_arduino_port() is not None:
                                 positive_prob = 0.5
@@ -259,7 +245,6 @@ def predict_image(bboxes, frame, model):
     # Se la probabilità della classe positiva è maggiore della soglia specificata, mostra una finestra con il frame
     threshold = 0.009
     if max_positive_prob > threshold:
-        print("Predicted! positive prob: ", max_positive_prob)
         bPredict = True
         return (bPredict, max_bbox, max_positive_prob)
     else:
@@ -385,13 +370,13 @@ def retrain_method(model, photos_now, indexPhoto):
 
     try:
         for photo_file in photo_files:
+            print("***  Start with another incorrect photo. N: ", incorrect_photo_number, "  ***")
             for index in range(len(photos_now)):
                 photo_path = os.path.join(photo_folder, photo_file)
                 photo_incorrect = Image.open(photo_path)
 
                 incorrect_photo_number += 1
 
-                print("***  Start with another incorrect photo. N: ", incorrect_photo_number, "  ***")
                 model = retrain_model(model, photos_now[index], photo_incorrect)
 
                 print("Data augmentation")
@@ -776,24 +761,25 @@ def find_arduino_port():
 
 def Print_Serial(x_coordinate, y_coordinate, distance, positive_prob):
 
-    ser = serial.Serial('COM3',9600)
 
-    x_coordinate = 300
-    positive_prob = 50
     distance = round(distance, 2)
+    positive_prob = positive_prob * 100
+    positive_prob = round(positive_prob, 2)
 
     print(f"{x_coordinate},{y_coordinate},{distance},{positive_prob}\n")
 
+    x_coordinate = 0.640
+    distance = 0.054
+    positive_prob = 5.403
+
     # Formatta i dati come una stringa separata da virgole
-    data = f"{x_coordinate},{y_coordinate},{distance},{positive_prob}\n"
+    data = f"{x_coordinate},{distance},{positive_prob}\n"
 
     # Invia i dati ad Arduino
     ser.write(data.encode())
 
     # Attendi un breve ritardo prima di inviare il prossimo set di dati
-    #time.sleep(1)
-
-    ser.close()
+    time.sleep(0.01)
 
     return None
 

@@ -438,19 +438,28 @@ def retrain_model(model, photo_now, photo_incorrect):
     combined_dataset = torch.utils.data.ConcatDataset([dataset_now, dataset_incorrect])
 
     # Training the model
-    criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    loss_fn = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     train_loader = torch.utils.data.DataLoader(combined_dataset, batch_size=1, shuffle=True)
+
+    inputs, labels = data
+    inputs, labels = inputs.to(device), labels.to(device)
+
     for epoch in range(1):
         running_loss = 0.0
         for i, data in enumerate(train_loader, 0):
-            inputs, labels = data
-            inputs, labels = inputs.to(device), labels.to(device)
+            model.train()
+
+            y_logits = model(inputs)
+            y_pred = torch.softmax(y_logits, dim=1).argmax(dim=1)
+
+            loss =loss_fn(y_logits, inputs)
+
             optimizer.zero_grad()
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+
+
             running_loss += loss.item()
         print(f"Epoch {epoch + 1} loss: {running_loss / len(train_loader)}")
 

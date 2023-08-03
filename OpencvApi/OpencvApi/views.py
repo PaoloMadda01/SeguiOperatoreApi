@@ -289,6 +289,8 @@ def calculate_coordinates(depth_image, bbox):
 #       **********            UPDATE MODEL           **********
 
 def update_model(request):
+    download_helper_functions()
+    
     photos_now = capture_4photos(request)
     cropped_images = []
     # Verifica se l'immagine è stata acquisita correttamente
@@ -989,14 +991,24 @@ def test_step(data_loader: torch.utils.data.DataLoader,
 
 
 import requests
-from pathlib import Path 
+from pathlib import Path
 
-# Download helper functions from Learn PyTorch repo (if not already downloaded)
-if Path("helper_functions.py").is_file():
-  print("helper_functions.py already exists, skipping download")
-else:
-  print("Downloading helper_functions.py")
-  # Note: you need the "raw" GitHub URL for this to work
-  request = requests.get("https://raw.githubusercontent.com/mrdbourke/pytorch-deep-learning/main/helper_functions.py")
-  with open("helper_functions.py", "wb") as f:
-    f.write(request.content)
+def download_helper_functions():
+    # Check if the helper_functions.py file already exists
+    if Path("helper_functions.py").is_file():
+        print("helper_functions.py already exists, skipping download")
+    else:
+        print("Downloading helper_functions.py")
+        # Note: you need the "raw" GitHub URL for this to work
+        url = "https://raw.githubusercontent.com/mrdbourke/pytorch-deep-learning/main/helper_functions.py"
+        try:
+            response = requests.get(url)
+            response.raise_for_status()  # Raise an exception for non-2xx status codes
+            with open("helper_functions.py", "wb") as f:
+                f.write(response.content)
+            print("Download completed successfully.")
+        except requests.exceptions.RequestException as e:
+            print(f"Error downloading helper_functions.py: {e}")
+
+# Chiamata alla funzione per effettuare il download
+download_helper_functions()

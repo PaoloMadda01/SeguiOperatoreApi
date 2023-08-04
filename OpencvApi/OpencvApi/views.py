@@ -924,8 +924,6 @@ def print_train_time(start: float, end: float, device: torch.device = None):
 
 
 
-
-
 def train_step(model: torch.nn.Module,
                data_loader: torch.utils.data.DataLoader,
                loss_fn: torch.nn.Module,

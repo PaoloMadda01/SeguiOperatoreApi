@@ -24,7 +24,7 @@ import serial.tools.list_ports
 from timeit import default_timer as timer
 import time
 # Import accuracy metric
-from helper_functions import accuracy_fn
+#from helper_functions import accuracy_fn
 
 # python3 manage.py runserver 192.168.181.129:8000
 
@@ -561,7 +561,7 @@ def retrain_model(model, photo_now, photo_incorrect):
                     model=model, 
                     loss_fn=loss_fn,
                     optimizer=optimizer,
-                    accuracy_fn=accuracy_fn,
+                    # accuracy_fn=accuracy_fn,
                     device=device
                     )
         # test_step(data_loader=test_dataloader,
@@ -930,7 +930,7 @@ def train_step(model: torch.nn.Module,
                data_loader: torch.utils.data.DataLoader,
                loss_fn: torch.nn.Module,
                optimizer: torch.optim.Optimizer,
-               accuracy_fn,
+               # accuracy_fn,
                device: torch.device = device):
     train_loss, train_acc = 0, 0
     model.to(device)
@@ -944,8 +944,8 @@ def train_step(model: torch.nn.Module,
         # 2. Calculate loss
         loss = loss_fn(y_pred, y)
         train_loss += loss
-        train_acc += accuracy_fn(y_true=y,
-                                 y_pred=y_pred.argmax(dim=1)) # Go from logits -> pred labels
+        # train_acc += accuracy_fn(y_true=y,
+           #                      y_pred=y_pred.argmax(dim=1)) # Go from logits -> pred labels
 
         # 3. Optimizer zero grad
         optimizer.zero_grad()
@@ -958,13 +958,13 @@ def train_step(model: torch.nn.Module,
 
     # Calculate loss and accuracy per epoch and print out what's happening
     train_loss /= len(data_loader)
-    train_acc /= len(data_loader)
-    print(f"Train loss: {train_loss:.5f} | Train accuracy: {train_acc:.2f}%")
+    #train_acc /= len(data_loader)
+    print(f"Train loss: {train_loss:.5f} | Train accuracy: %")
 
 def test_step(data_loader: torch.utils.data.DataLoader,
               model: torch.nn.Module,
               loss_fn: torch.nn.Module,
-              accuracy_fn,
+              # accuracy_fn,
               device: torch.device = device):
     test_loss, test_acc = 0, 0
     model.to(device)
@@ -980,35 +980,35 @@ def test_step(data_loader: torch.utils.data.DataLoader,
             
             # 2. Calculate loss and accuracy
             test_loss += loss_fn(test_pred, y)
-            test_acc += accuracy_fn(y_true=y,
-                y_pred=test_pred.argmax(dim=1) # Go from logits -> pred labels
-            )
+            #test_acc += accuracy_fn(y_true=y,
+             #   y_pred=test_pred.argmax(dim=1) # Go from logits -> pred labels
+            #)
         
         # Adjust metrics and print out
         test_loss /= len(data_loader)
-        test_acc /= len(data_loader)
-        print(f"Test loss: {test_loss:.5f} | Test accuracy: {test_acc:.2f}%\n")
+        # test_acc /= len(data_loader)
+        print(f"Test loss: {test_loss:.5f} | Test accuracy: %\n")
 
 
-import requests
-from pathlib import Path
+# import requests
+# from pathlib import Path
 
-def download_helper_functions():
+# def download_helper_functions():
     # Check if the helper_functions.py file already exists
-    if Path("helper_functions.py").is_file():
-        print("helper_functions.py already exists, skipping download")
-    else:
-        print("Downloading helper_functions.py")
+ #    if Path("helper_functions.py").is_file():
+  #      print("helper_functions.py already exists, skipping download")
+   # else:
+    #    print("Downloading helper_functions.py")
         # Note: you need the "raw" GitHub URL for this to work
-        url = "https://raw.githubusercontent.com/mrdbourke/pytorch-deep-learning/main/helper_functions.py"
-        try:
-            response = requests.get(url)
-            response.raise_for_status()  # Raise an exception for non-2xx status codes
-            with open("helper_functions.py", "wb") as f:
-                f.write(response.content)
-            print("Download completed successfully.")
-        except requests.exceptions.RequestException as e:
-            print(f"Error downloading helper_functions.py: {e}")
+     #   url = "https://raw.githubusercontent.com/mrdbourke/pytorch-deep-learning/main/helper_functions.py"
+      #  try:
+       #     response = requests.get(url)
+        #    response.raise_for_status()  # Raise an exception for non-2xx status codes
+         #   with open("helper_functions.py", "wb") as f:
+          #      f.write(response.content)
+           # print("Download completed successfully.")
+        # except requests.exceptions.RequestException as e:
+          #  print(f"Error downloading helper_functions.py: {e}")
 
 # Chiamata alla funzione per effettuare il download
-download_helper_functions()
+# download_helper_functions()

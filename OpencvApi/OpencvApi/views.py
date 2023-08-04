@@ -562,7 +562,7 @@ def retrain_model(model, photo_now, photo_incorrect):
                     loss_fn=loss_fn,
                     optimizer=optimizer,
                     # accuracy_fn=accuracy_fn,
-                    device=device
+                    #device=device
                     )
         # test_step(data_loader=test_dataloader,
                     # model=model,
@@ -929,7 +929,9 @@ def train_step(model: torch.nn.Module,
                loss_fn: torch.nn.Module,
                optimizer: torch.optim.Optimizer,
                # accuracy_fn,
-               device: torch.device = device):
+               #device: torch.device = device
+               ):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     train_loss, train_acc = 0, 0
     model.to(device)
     for batch, (X, y) in enumerate(data_loader):
